@@ -1,0 +1,7 @@
+# 本機開發工具設定（測試伺服器路徑只在這台電腦有效）
+.claude/
+
+# 系統產生的檔案
+Thumbs.db
+desktop.ini
+.DS_Store

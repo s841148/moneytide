@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>錢潮 MoneyTide</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <section id="setup"></section>
+
+  <section id="game" hidden>
+    <header id="topbar"></header>
+    <div id="ticker"></div>
+    <main class="layout">
+      <aside id="players"></aside>
+      <div class="board-wrap"><div id="weather" class="weather"></div><div id="board"></div></div>
+      <aside id="statement"></aside>
+    </main>
+  </section>
+
+  <div id="tooltip" hidden></div>
+  <div id="toasts"></div>
+  <div id="modal" hidden></div>
+
+  <!-- 資料 -->
+  <script src="data/i18n.js"></script>
+  <script src="data/professions.js"></script>
+  <script src="data/board.js"></script>
+  <script src="data/cards.js"></script>
+  <script src="data/quiz.js"></script>
+  <script src="data/glossary.js"></script>
+  <script src="data/market.js"></script>
+  <script src="data/strategy.js"></script>
+  <!-- 程式 -->
+  <script src="js/rng.js"></script>
+  <script src="js/macro.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/achievements.js"></script>
+  <script src="js/tutorial.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/glossary-ui.js"></script>
+  <script src="js/ui.js"></script>
+  <script>MT.UI.init();</script>
+</body>
+</html>
