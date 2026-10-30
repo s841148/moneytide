@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 總經引擎與價格模型（GDD 第 7、8 章）。只處理數字，不碰畫面。
 // 每季結算：世界新聞 → 景氣階段 → GDP/通膨/失業/油價/VIX → 央行利率 → 匯率 → 所有商品價格 → 因果鏈說明。
 window.MT = window.MT || {};

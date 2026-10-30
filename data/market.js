@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 市場資料：可交易商品、景氣階段、市場消息卡、世界新聞卡。所有公司皆為虛構。
 // 商品欄位：
 //   price 初始價格（以 ccy 計）、beta 跟大盤的連動倍數、vol 每季個別波動、yield 年配息率

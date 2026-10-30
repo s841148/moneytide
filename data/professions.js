@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 職業資料（每月金額，單位：新台幣）。
 // 總支出 = living + tax + 各項負債的每月還款。home = 自住房價值（不產生現金流）。
 // floating：浮動利率房貸，月付會隨央行利率調整。

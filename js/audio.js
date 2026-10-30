@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 音效與背景音樂：全部用 Web Audio 即時合成，不需要任何音檔，離線也能播。
 // 瀏覽器規定要使用者先點一下畫面才能出聲，所以第一次點擊時才啟動。
 window.MT = window.MT || {};

@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 介面文字（繁中 / English）。卡牌與名詞的文字放在各自的資料檔裡。
 window.MT = window.MT || {};
 
@@ -43,6 +44,8 @@ MT.STR = {
   zh: {
     title: '錢潮 MoneyTide',
     subtitle: '從老鼠賽跑到財務自由的金融冒險',
+    copyright: '© 2026 麥麥的遊戲工廠　保留所有權利',
+    legal_note: '未經同意請勿重製、轉載或商業使用。遊戲中的公司與部分事件為虛構，內容僅供教育，不構成投資建議。',
     setup_players: '玩家人數',
     setup_names: '玩家名稱',
     player_default: '玩家 {n}',
@@ -513,6 +516,8 @@ MT.STR = {
   en: {
     title: 'MoneyTide',
     subtitle: 'A financial adventure from the Rat Race to Financial Freedom',
+    copyright: '© 2026 麥麥的遊戲工廠 (Maimai\'s Game Factory). All rights reserved.',
+    legal_note: 'No copying, re-hosting or commercial use without permission. Companies and some events are fictional. For education only — not investment advice.',
     setup_players: 'Players',
     setup_names: 'Player names',
     player_default: 'Player {n}',

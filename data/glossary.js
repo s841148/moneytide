@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 名詞百科。撰寫原則見 GDD 第 13A 章：一句話 ≤ 30 字、一定有生活比喻、說明在遊戲中的影響。
 // one = 一句話、analogy = 生活比喻、game = 在遊戲中、mid = 原理（進階）、deep = 深入（專家）
 window.MT = window.MT || {};

@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 畫面特效：紙花、事件橫幅、金額浮出、畫面震動、四季天氣。只負責視覺，不改遊戲狀態。
 window.MT = window.MT || {};
 

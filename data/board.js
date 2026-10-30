@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 內圈「老鼠賽跑」棋盤：24 格，第 0 格是起點（發薪日）。
 // 說明文字中的 [[名詞id]] 會變成可點擊的名詞解釋。
 window.MT = window.MT || {};

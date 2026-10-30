@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 新手教學：用提示泡泡一步一步帶玩家玩第一年。需要玩家動手的步驟，會等玩家真的做了才往下。
 window.MT = window.MT || {};
 

@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 畫面：開局設定、棋盤、回合操作、財報、市場、季報、結算。
 // 每次動作後整個重繪，狀態一律來自 MT.Engine。
 window.MT = window.MT || {};
@@ -182,8 +183,14 @@ window.MT = window.MT || {};
       + '<h3>' + t('setup_seed') + '</h3>'
       + '<input class="seed-input" placeholder="' + esc(t('setup_seed_ph')) + '" value="' + esc(s.seed) + '">'
       + '<button class="btn primary big" data-action="start"' + (hosting && N.status !== 'open' ? ' disabled' : '') + '>' + t(hosting ? 'net_start' : 'start') + ' ➜</button>'
+      + copyrightFooter()
       + '</div>';
     if (hosting) N.pushLobby();
+  }
+
+  // 開局畫面底部的版權宣告與免責聲明
+  function copyrightFooter() {
+    return '<footer class="copyright"><strong>' + t('copyright') + '</strong><span>' + t('legal_note') + '</span></footer>';
   }
 
   // 單機開局畫面上的「網路連線對戰」面板
@@ -230,7 +237,7 @@ window.MT = window.MT || {};
       html += '<p class="lead">' + (N.mySeat != null ? t('net_you_seat', { n: N.mySeat + 1 }) : t('net_you_spec')) + '</p>'
         + '<p class="muted">' + t(MT.UI.game ? 'net_next_wait' : 'net_lobby_wait') + '</p>';
     }
-    html += '</div>';
+    html += copyrightFooter() + '</div>';
     if (lb) {
       const STY = MT.AI.STYLES;
       html += '<h3>' + t('net_players') + '</h3><div class="names">' + lb.seats.map((seat, i) => {

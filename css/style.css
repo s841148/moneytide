@@ -1,3 +1,4 @@
+/* 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE */
 /* 錢潮 MoneyTide
    棋盤與卡牌：明亮卡通風；財報與跑馬燈：金融終端機風（深色）。 */
 
@@ -620,3 +621,7 @@ i { font-style: normal; }
 .fx-emote span { font-size: 42px; filter: drop-shadow(0 4px 8px rgba(0,0,0,.3)); }
 .fx-emote small { font-size: 12px; font-weight: 700; background: var(--surface); border-radius: 99px; padding: 1px 8px; box-shadow: var(--shadow); }
 @keyframes emote-up { 0% { opacity: 0; transform: translate(-50%, 10px) scale(.6); } 15% { opacity: 1; transform: translate(-50%, 0) scale(1.2); } 100% { opacity: 0; transform: translate(-50%, -70px) scale(1); } }
+
+/* 版權宣告 */
+.copyright { margin-top: 22px; padding-top: 14px; border-top: 1px solid rgba(0, 0, 0, .08); text-align: center; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.copyright strong { font-weight: 600; }

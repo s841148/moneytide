@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 電腦 AI 對手（GDD 第 12 章）。每次只決定「下一個動作」，由畫面一步一步執行，玩家才看得懂 AI 在做什麼。
 // decide(state) → { action, reason }，reason 是雙語的決策理由，會寫進紀錄。
 window.MT = window.MT || {};

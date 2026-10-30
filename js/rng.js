@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 可設定種子的亂數（mulberry32）。亂數狀態存在 game state 裡，相同種子 = 相同遊戲過程。
 window.MT = window.MT || {};
 

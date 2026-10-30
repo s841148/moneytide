@@ -26,5 +26,17 @@ A board-and-card web game that teaches personal finance, macroeconomics and inve
 
 設計細節請見 [GDD-遊戲設計文件.md](GDD-遊戲設計文件.md)。
 
-> 遊戲中的公司、部分事件與國家為虛構，內容僅供教育用途，不構成任何投資建議。
-> Companies and some events are fictional. For education only — not investment advice.
+## 版權 / Copyright
+
+© 2026 **麥麥的遊戲工廠**。保留所有權利。All rights reserved.
+
+歡迎透過上面的官方網址免費遊玩，也可以在非營利的個人學習或課堂教學中使用，但請註明出處。
+**未經麥麥的遊戲工廠書面同意，請勿重製、修改、轉載、另外架站或做商業使用。** 詳見 [LICENSE](LICENSE)。
+
+Free to play at the official URL, and free to use for non-profit learning or teaching with attribution.
+Copying, modifying, re-hosting or commercial use requires written permission. See [LICENSE](LICENSE).
+
+## 免責聲明 / Disclaimer
+
+> 遊戲中的公司、部分事件與國家為虛構，市場模型經過簡化，內容僅供教育與娛樂用途，不構成任何投資、理財、稅務或法律建議。
+> Companies, some events and countries are fictional and the market model is simplified. For education and entertainment only — not investment, financial, tax or legal advice.

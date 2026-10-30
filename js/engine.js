@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 遊戲引擎：只處理規則與狀態，不碰畫面。
 // 所有變化都透過 dispatch(state, action) 進行，之後做網路連線時只需同步 action。
 window.MT = window.MT || {};

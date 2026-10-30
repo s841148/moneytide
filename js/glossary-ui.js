@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 名詞解釋系統：文字中的 [[id]] 或 [[id|顯示文字]] 會變成可點擊的名詞。
 // 第一次遇到的名詞會「解鎖」並跳出提示，解鎖紀錄跨局保存在本機。
 window.MT = window.MT || {};

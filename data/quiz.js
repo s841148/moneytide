@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 進修問答題。level 對應遊戲難度：easy / medium / hard。answer = 正確選項的索引。
 window.MT = window.MT || {};
 MT.DATA = MT.DATA || {};

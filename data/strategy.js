@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // M3：策略手牌與地緣政治卡。
 // 策略卡 kind：attack 攻擊 / defense 防禦 / intel 情報 / special 特殊
 //   target：出牌時要選的目標（stock 一檔股票、sector 一個產業、player 一位玩家、asset 對手的一項資產）

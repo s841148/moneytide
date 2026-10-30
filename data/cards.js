@@ -1,3 +1,4 @@
+// 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
 // 卡牌資料。金額單位：新台幣。
 // 機會卡：cost 總價、down 頭期款（或投入金額）、cashflow 每月淨現金流（已扣掉貸款月付）。
 // risk：事業的經營風險倍數（衰退時倒閉機率 × risk），越依賴人潮或流行的生意越高。
