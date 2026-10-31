@@ -104,6 +104,81 @@ window.MT = window.MT || {};
     } catch (e) { return null; }
   }
 
+  // ── 存檔匯出／匯入（換裝置接著玩）──
+  // 代碼格式：MTZ1: + gzip 後的 base64（瀏覽器不支援壓縮時用 MTJ1: + 原始 JSON 的 base64）
+  function toB64(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  function fromB64(str) {
+    const s = atob(str);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  async function encodeSave(g) {
+    // 紀錄只用到最近幾回合，代碼版只留最後 150 筆，讓代碼短到能用聊天軟體傳
+    const cut = Math.max(0, g.log.length - 150);
+    const json = JSON.stringify(Object.assign({}, g, { log: g.log.slice(cut), turnLogStart: Math.max(0, g.turnLogStart - cut) }));
+    if (window.CompressionStream) {
+      const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+      return 'MTZ1:' + toB64(new Uint8Array(await new Response(stream).arrayBuffer()));
+    }
+    return 'MTJ1:' + toB64(new TextEncoder().encode(json));
+  }
+  async function decodeSave(text) {
+    const s = String(text || '').trim();
+    let json;
+    if (s.charAt(0) === '{') json = s;
+    else if (s.indexOf('MTZ1:') === 0) {
+      const stream = new Blob([fromB64(s.slice(5).replace(/\s+/g, ''))]).stream().pipeThrough(new DecompressionStream('gzip'));
+      json = await new Response(stream).text();
+    } else if (s.indexOf('MTJ1:') === 0) json = new TextDecoder().decode(fromB64(s.slice(5).replace(/\s+/g, '')));
+    else return null;
+    const g = JSON.parse(json);
+    const ok = g && g.version === E.SAVE_VERSION && Array.isArray(g.players) && g.config && g.macro && g.phase !== 'gameover';
+    return ok ? g : null;
+  }
+
+  function openSaveMenu() {
+    const g = UI.game;
+    UI.modal('<h2>💾 ' + t('sv_title') + '</h2>'
+      + '<p>' + t('sv_desc') + '</p>'
+      + '<p class="small muted">' + esc(t('sv_info', { round: g.round, total: g.config.rounds, names: g.players.map((p) => p.name).join('、') })) + '</p>'
+      + '<div class="sv-btns"><button class="btn primary" data-action="save-download">⬇️ ' + t('sv_download') + '</button>'
+      + '<button class="btn" data-action="save-copy">📋 ' + t('sv_copy') + '</button></div>'
+      + '<p class="small muted">' + t('sv_how') + '</p>', 'small-modal');
+  }
+
+  function openImport() {
+    UI.modal('<h2>📂 ' + t('sv_import_title') + '</h2>'
+      + '<label class="sv-file">' + t('sv_file') + '<input type="file" accept=".json,.txt,application/json,text/plain" class="sv-file-input"></label>'
+      + '<label class="sv-paste">' + t('sv_paste') + '<textarea class="sv-code" rows="5" placeholder="MTZ1:…"></textarea></label>'
+      + '<div class="actions"><button class="btn primary" data-action="save-import">' + t('sv_load') + '</button></div>'
+      + '<p class="small muted">' + t('sv_import_note') + '</p>', 'small-modal');
+  }
+
+  async function doImport(text) {
+    let g = null;
+    try { g = await decodeSave(text); } catch (e) { g = null; }
+    if (!g) { UI.toast(esc(t('sv_bad')), 'err-toast', 4000); return; }
+    UI.closeModal();
+    resumeGame(g);
+    saveGame();
+    UI.toast(esc(t('sv_loaded')), '', 3000);
+  }
+
+  function resumeGame(g) {
+    UI.game = g;
+    UI.viewPlayer = null;
+    UI.turnKey = null;
+    UI.lastReport = g.report ? g.report.round : null;
+    UI.seenLog = g.turnLogStart;
+    renderGame();
+    scheduleAI();
+  }
+
   // ── 開局設定 ──
   function soundBtn() {
     const on = MT.Audio.settings.sfx || MT.Audio.settings.music;
@@ -158,6 +233,7 @@ window.MT = window.MT || {};
       + '<button class="btn ghost" data-action="lang">🌐 ' + t('lang_toggle') + '</button></div></div>'
       + (hosting ? hostPanel() : '<button class="btn tutorial' + (MT.Tutorial.isDone() ? '' : ' first') + '" data-action="tutorial">🎓 ' + t('tut_start') + '<small>' + t(MT.Tutorial.isDone() ? 'tut_start_d2' : 'tut_start_d') + '</small></button>')
       + (resume ? '<button class="btn resume" data-action="resume">▶ ' + t('resume') + '</button>' : '')
+      + (hosting ? '' : '<button class="btn ghost import-btn" data-action="save-import-open">📂 ' + t('sv_import_btn') + '</button>')
       + (hosting ? '' : onlinePanel())
       + '<h3>' + t('setup_players') + '</h3>'
       + seg('count', [1, 2, 3, 4].map((n) => ({ value: String(n), label: n + ' 👤' })), String(s.count))
@@ -296,11 +372,13 @@ window.MT = window.MT || {};
     const ph = D.phases[g.macro.phase];
     const recent = g.log.slice(-8).map((e) => esc(t(e.key, e.params))).join('<span class="sep">◆</span>');
     $('#topbar').innerHTML = ''
-      + '<div class="brand">🌊 ' + t('title') + '</div>'
+      + '<div class="brand">🌊 <span class="brand-name">' + t('title') + '</span></div>'
       + '<div class="round">' + t('round_label', ri) + ' <span class="muted">' + t('round_of', { round: g.round, total: g.config.rounds }) + '</span></div>'
       + '<button class="phase-chip" data-action="report" style="--ph:' + ph.color + '">' + ph.icon + ' ' + esc(L(ph.name)) + ' · ' + t('m_rate') + ' ' + g.macro.rate.toFixed(2) + '%</button>'
+      + '<button class="btn ghost sm menu-btn" data-action="top-menu" aria-label="menu">' + ($('#topbar').classList.contains('open') ? '✕' : '☰') + '</button>'
       + '<div class="top-btns">'
       + '<button class="btn ghost sm" data-action="report">' + t('rp_btn') + '</button>'
+      + '<button class="btn ghost sm" data-action="save-menu">💾 ' + t('sv_btn') + '</button>'
       + '<button class="btn ghost sm" data-action="glossary">' + t('glossary_btn', { n: MT.Gloss.count(), total: MT.Gloss.total() }) + '</button>'
       + '<button class="btn ghost sm" data-action="ach">🏅 ' + MT.Ach.count() + '/' + MT.Ach.total() + '</button>'
       + soundBtn()
@@ -1257,8 +1335,27 @@ window.MT = window.MT || {};
     renderPlayers();
     renderBoard();
     renderRight();
+    renderMobileNav();
     MT.FX.weather(UI.game.macro.phase);
     MT.Gloss.flushUnlocks();
+  }
+
+  // ── 手機版：底部分頁（棋盤／財報／市場），一次只顯示一個區塊 ──
+  UI.mview = 'board';
+  UI.turnKey = null;
+
+  function renderMobileNav() {
+    const g = UI.game;
+    // 輪到自己擲骰或要處理格子事件時，自動切回棋盤
+    const key = g.round + '-' + g.current + '-' + g.phase;
+    if (key !== UI.turnKey) {
+      UI.turnKey = key;
+      if (isMine(g.players[g.current]) && (g.phase === 'roll' || g.phase === 'resolve')) UI.mview = 'board';
+    }
+    const v = UI.mview;
+    $('#game').dataset.mview = v;
+    $('#mnav').innerHTML = [['board', '🎲 ' + t('mv_board')], ['statement', t('tab_statement')], ['market', t('tab_market')]]
+      .map(([k, label]) => '<button class="' + (v === k ? 'on' : '') + '" data-action="mview" data-v="' + k + '">' + label + '</button>').join('');
   }
 
   const FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
@@ -1575,14 +1672,40 @@ window.MT = window.MT || {};
         renderSetup();
         break;
       case 'start': startGame(); break;
-      case 'resume':
-        UI.game = loadSave();
-        UI.viewPlayer = null;
-        UI.lastReport = UI.game.report ? UI.game.report.round : null;
-        UI.seenLog = UI.game.turnLogStart;
-        renderGame();
-        scheduleAI();
+      case 'resume': resumeGame(loadSave()); break;
+      case 'save-menu': $('#topbar').classList.remove('open'); renderTop(); openSaveMenu(); break;
+      case 'save-download': {
+        const g = UI.game;
+        const blob = new Blob([JSON.stringify(g)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'moneytide-save-r' + g.round + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
         break;
+      }
+      case 'save-copy':
+        encodeSave(UI.game).then((code) => {
+          // 不能直接寫入剪貼簿時（例如非 https），改成顯示代碼讓玩家自己複製
+          const fallback = () => {
+            UI.modal('<h2>📋 ' + t('sv_copy') + '</h2><textarea class="sv-code" rows="8" readonly>' + esc(code) + '</textarea>', 'small-modal');
+            const ta = document.querySelector('#modal .sv-code');
+            if (ta) ta.select();
+          };
+          if (!navigator.clipboard) { fallback(); return; }
+          navigator.clipboard.writeText(code).then(() => UI.toast(esc(t('sv_copied')), '', 4500), fallback);
+        });
+        break;
+      case 'save-import-open': openImport(); break;
+      case 'save-import': {
+        const f = document.querySelector('.sv-file-input');
+        const code = document.querySelector('.sv-code');
+        if (f && f.files && f.files[0]) f.files[0].text().then(doImport);
+        else doImport(code ? code.value : '');
+        break;
+      }
       case 'lang':
         MT.setLang(MT.lang === 'zh' ? 'en' : 'zh');
         document.documentElement.lang = MT.lang === 'zh' ? 'zh-Hant' : 'en';
@@ -1663,8 +1786,23 @@ window.MT = window.MT || {};
         renderRight();
         MT.Gloss.flushUnlocks();
         break;
+      case 'top-menu':
+        $('#topbar').classList.toggle('open');
+        renderTop();
+        break;
+      case 'mview': {
+        const v = el.dataset.v;
+        UI.mview = v;
+        if (v !== 'board') { UI.rightTab = v; renderRight(); }
+        renderMobileNav();
+        window.scrollTo(0, 0);
+        MT.Gloss.flushUnlocks();
+        break;
+      }
       case 'rtab':
         UI.rightTab = el.dataset.tab;
+        if (UI.mview !== 'board') UI.mview = el.dataset.tab;
+        if ($('#mnav').innerHTML) renderMobileNav();
         UI.closeModal();
         renderRight();
         MT.Gloss.flushUnlocks();
