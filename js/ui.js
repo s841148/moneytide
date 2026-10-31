@@ -293,7 +293,7 @@ window.MT = window.MT || {};
         ? '<div class="custom-len"><input type="range" min="12" max="80" step="4" value="' + s.customRounds + '" data-action="custom-rounds"> <span>' + t('len_detail', { rounds, years: rounds / 4 }) + '</span></div>'
         : '')
       + '<h3>' + t('setup_retire') + '</h3>'
-      + seg('retire', ['on', 'off'].map((v) => ({ value: v, label: t('retire_' + v), desc: v === 'on' ? t('retire_on_d', { round: rounds - Math.floor(rounds * 0.2) + 1 }) : t('retire_off_d') })), s.retire)
+      + seg('retire', ['on', 'off'].map((v) => ({ value: v, label: t('retire_' + v), desc: v === 'on' ? t('retire_on_d', { round: E.retireRoundOf(rounds), early: E.earliestOf(rounds, E.retireRoundOf(rounds)) }) : t('retire_off_d') })), s.retire)
       + '<h3>' + t('setup_role') + '</h3>'
       + seg('roleMode', ['random', 'skill', 'equal'].map((v) => ({ value: v, label: t('role_' + v), desc: t('role_' + v + '_d') })), s.roleMode)
       + '<h3>' + t('setup_seed') + '</h3>'
@@ -1085,15 +1085,48 @@ window.MT = window.MT || {};
         + row(t('ret_left'), fmt(p.pension.acct))
         + '<p class="muted small">' + rich(t('ret_note_retired')) + '</p>';
     } else {
-      const left = g.config.retire ? g.config.retireRound - g.round : null;
-      html += (left != null ? '<p class="note">' + t('ret_countdown', { n: left, round: g.config.retireRound }) + '</p>' : '<p class="muted small">' + t('ret_off') + '</p>')
+      const on = g.config.retire;
+      const early = on ? E.earliestRetire(g) : 0;
+      const q = E.pensionQuote(g, p);
+      const canRetire = can && on && g.round >= early;
+      html += (on
+        ? '<p class="note">' + t('ret_countdown', { n: g.config.retireRound - g.round, round: g.config.retireRound }) + '<br>'
+          + (g.round >= early ? t('ret_can_now', { cut: Math.round((1 - q.factor) * 100) }) : t('ret_can_from', { round: early })) + '</p>'
+        : '<p class="muted small">' + t('ret_off') + '</p>')
         + row(rich(t('ret_acct_bal')), fmt(p.pension.acct))
-        + row(t('ret_est'), fmt(Math.round((p.salary * 0.4) / 100) * 100 + Math.round(p.pension.acct / 240)) + t('per_month'))
+        + row(t(on && g.round >= early ? 'ret_est_now' : 'ret_est'), fmt(on && g.round >= early ? q.total : Math.round((p.salary * 0.4) / 100) * 100 + q.fromAcct) + t('per_month'),
+          canRetire ? '<button class="btn xs primary" data-action="retire-open">🏖️ ' + t('ret_apply') + '</button>' : '')
         + row((p.pension.self ? '✅ ' : '⬜ ') + rich(t('ret_self')), fmt(Math.round(p.salary * E.PENSION_SELF)) + t('per_month'),
           can ? '<button class="btn xs' + (p.pension.self ? '' : ' primary') + '" data-action="pension-self" data-on="' + (p.pension.self ? '0' : '1') + '">' + t(p.pension.self ? 'ret_self_off' : 'ret_self_on') + '</button>' : '')
         + '<p class="muted small">' + rich(t('ret_note')) + '</p>';
     }
     return html + '</section>';
+  }
+
+  // 申請退休：比較退休前後的每月現金流
+  function openRetire() {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const q = E.pensionQuote(g, p);
+    const passive = C.realPassive(g, p);
+    const expAfter = Math.round(C.expenses(p) - p.living * 0.2 - p.tax - C.childCost(p) - C.selfPension(p));
+    const cfNow = C.cashflow(g, p);
+    const cfAfter = passive + C.scamIncome(p) + q.total - expAfter;
+    const row = (label, val, cls) => '<div class="srow"><span>' + label + '</span><b class="' + (cls || '') + '">' + val + '</b></div>';
+    const cut = Math.round((1 - q.factor) * 100);
+    UI.modal('<h2>🏖️ ' + t('ret_title') + '</h2>'
+      + (cut > 0 ? '<p class="note">' + rich(t('ret_early_note', { cut, n: g.config.retireRound - g.round })) + '</p>' : '')
+      + row(t('ret_salary_now'), fmt(Math.round(p.salary)))
+      + row(rich(t('ret_labor')) + (cut > 0 ? ' <small class="neg">−' + cut + '%</small>' : ''), fmt(q.labor))
+      + row(rich(t('ret_acct')), fmt(q.fromAcct))
+      + row(rich({ zh: '[[passive_income]]', en: '[[passive_income]]' }), fmt(passive))
+      + row(t('ret_exp_after'), fmt(-expAfter))
+      + row(t('ret_cf_now'), fmt(cfNow), moneyCls(cfNow))
+      + row(t('ret_cf_after'), fmt(cfAfter), 'grand ' + moneyCls(cfAfter))
+      + '<p class="small">' + rich(t('ret_perks')) + '</p>'
+      + (cfAfter < 0 ? '<p class="note bad">' + rich(t('ret_gap_warn', { amount: { money: -cfAfter } })) + '</p>' : '<p class="note good">' + rich(t('ret_fire_ok')) + '</p>')
+      + '<div class="actions"><button class="btn" data-action="close-modal">' + t('ret_keep') + '</button><button class="btn primary" data-action="retire-confirm">' + t('ret_confirm') + '</button></div>', 'small-modal');
+    MT.Gloss.flushUnlocks();
   }
 
   // ── 事業升級與上市 ──
@@ -1552,7 +1585,7 @@ window.MT = window.MT || {};
     log_quiz_right: 'success', log_quiz_wrong: 'wrong', log_card_gain: 'card', log_attack_stock: 'zap', log_attack_sector: 'zap',
     log_poach: 'zap', log_blocked: 'shield', log_insured: 'shield', log_hedge_pay: 'shield', log_auction_bid: 'tick',
     log_asset_sold: 'sold', log_asset_unsold: 'wrong',
-    log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_ipo: 'fanfare',
+    log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_retire_early: 'fanfare', log_ipo: 'fanfare',
     log_upgrade_ok: 'success', log_upgrade_fail: 'loss', log_upgrade_bust: 'alarm', log_insure_on: 'stamp', log_pension_on: 'stamp',
     log_debt_paid: 'happy', log_payoff: 'happy', log_loan: 'stamp', log_repay: 'stamp', log_settle: 'chime', log_trade_done: 'cash',
   };
@@ -1572,6 +1605,7 @@ window.MT = window.MT || {};
       case 'log_asset_sold': return ['🏷️ ' + esc(t('bn_sold', { name: P.name, card: P.card })), 'good'];
       case 'log_scam_bust': MT.FX.shake(); return ['🚨 ' + esc(t('bn_scam', { name: P.name, card: P.card })), 'bad'];
       case 'log_retire_all': return ['🏖️ ' + esc(t('bn_retire')), 'news'];
+      case 'log_retire_early': return ['🏖️ ' + esc(t('bn_retire_early', { name: P.name })), 'good'];
       case 'log_ipo': MT.FX.confetti(); return ['🔔 ' + esc(t('bn_ipo', { name: P.name, card: P.card })), 'good'];
       case 'log_upgrade_ok': return ['⬆️ ' + esc(t('bn_upgrade', { name: P.name, card: P.card })), 'good'];
       case 'log_upgrade_bust': MT.FX.shake(); return ['💥 ' + esc(t('bn_upgrade_bust', { card: P.card })), 'bad'];
@@ -1737,7 +1771,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -1953,6 +1987,8 @@ window.MT = window.MT || {};
       case 'insure': act({ type: 'INSURE', kind: el.dataset.kind, on: el.dataset.on === '1' }); break;
       case 'pension-self': act({ type: 'PENSION_SELF', on: el.dataset.on === '1' }); break;
       case 'up-open': openUpgrade(el.dataset.id); break;
+      case 'retire-open': openRetire(); break;
+      case 'retire-confirm': UI.closeModal(); act({ type: 'RETIRE' }); break;
       case 'up-confirm': UI.closeModal(); act({ type: 'UPGRADE', id: el.dataset.id }); break;
       case 'ipo-open': openIpo(el.dataset.id); break;
       case 'ipo-confirm': UI.closeModal(); act({ type: 'IPO', id: el.dataset.id }); break;
@@ -2041,6 +2077,10 @@ window.MT = window.MT || {};
       const span = e.target.nextElementSibling;
       span.textContent = t('len_detail', { rounds: UI.setup.customRounds, years: UI.setup.customRounds / 4 });
     }
+  });
+  // 自訂長度放開滑桿後重畫，讓退休回合等說明跟著更新
+  document.addEventListener('change', (e) => {
+    if (e.target.dataset && e.target.dataset.action === 'custom-rounds') renderSetup();
   });
 
   document.addEventListener('keydown', (e) => {

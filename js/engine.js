@@ -41,6 +41,8 @@ window.MT = window.MT || {};
   const PENSION_RETURN = 0.03 / 4; // 勞退帳戶每季報酬（年 3%）
   const LABOR_PENSION = 0.4; // 勞保年金 ≈ 退休前薪資 4 成
   const RETIRE_LIVING = 0.8; // 退休後不用通勤、應酬，生活費約剩 8 成
+  const RETIRE_EARLY_MAX = 20; // 最多提早 5 年（20 季）退休
+  const RETIRE_EARLY_CUT = 0.01; // 每提早 1 季，勞保年金少 1%（每年 4%）
   const PENSION_MONTHS = 240; // 勞退帳戶分 20 年領
   const SAVINGS_DEDUCTION = 270000; // 每年利息免稅額
   // 事業升級：從第 stage 階段升到下一階段的花費（× 原始價格）、現金流倍數、成功率
@@ -273,6 +275,19 @@ window.MT = window.MT || {};
     };
   }
 
+  function retireRoundOf(rounds) { return rounds - Math.floor(rounds * 0.1) + 1; }
+  // 最早可以申請退休的回合：最多提早 5 年，而且遊戲至少要過一半（短局不能一開始就退休）
+  function earliestOf(rounds, retireRound) { return Math.max(retireRound - RETIRE_EARLY_MAX, Math.ceil(rounds / 2)); }
+  function earliestRetire(state) { return earliestOf(state.config.rounds, state.config.retireRound); }
+  // 現在退休的勞保年金打幾折（提早退休每年少 4%）
+  function retireFactor(state) { return 1 - RETIRE_EARLY_CUT * Math.max(0, state.config.retireRound - state.round); }
+  function pensionQuote(state, p) {
+    const factor = retireFactor(state);
+    const labor = Math.round((p.salary * LABOR_PENSION * factor) / 100) * 100;
+    const fromAcct = Math.round(p.pension.acct / PENSION_MONTHS);
+    return { factor, labor, fromAcct, total: labor + fromAcct };
+  }
+
   function createGame(cfg) {
     const seed = cfg.seed && cfg.seed.trim() ? cfg.seed.trim() : String(Date.now());
     const rounds = cfg.length === 'custom'
@@ -286,9 +301,9 @@ window.MT = window.MT || {};
         roleMode: cfg.roleMode,
         rounds,
         seed,
-        // 退休階段：最後 2 成的回合薪水停止，改領年金
+        // 退休：最後 1 成的回合強制退休（法定退休年齡）；最多可以提早 5 年自己申請
         retire: cfg.retire !== false,
-        retireRound: rounds - Math.floor(rounds * 0.2) + 1,
+        retireRound: retireRoundOf(rounds),
       },
       rng: R.seedFrom(seed),
       round: 1,
@@ -609,7 +624,8 @@ window.MT = window.MT || {};
         break;
       case 'small':
       case 'big': {
-        const count = type === 'small' && p.skill === 'sales' ? 2 : 1;
+        // 業務員技能、或已經退休（有時間慢慢挑）：看 2 張選 1 張
+        const count = (type === 'small' && p.skill === 'sales') || p.retired ? 2 : 1;
         const cards = [];
         for (let i = 0; i < count; i++) cards.push(draw(state, type));
         state.pending = { type: 'deal', deck: type, cards };
@@ -1159,21 +1175,27 @@ window.MT = window.MT || {};
     state.players.forEach((p) => checkFreedom(state, p));
   }
 
-  // 進入退休階段：薪水停止，改領勞保年金 + 勞退帳戶（分 20 年領）
+  // 退休：薪水停止，改領勞保年金（提早退休打折）+ 勞退帳戶（分 20 年領）
+  function retire(state, p) {
+    const q = pensionQuote(state, p);
+    p.retired = true;
+    p.retiredRound = state.round;
+    p.salaryBefore = Math.round(p.salary);
+    p.pension.labor = q.labor;
+    p.pension.fromAcct = q.fromAcct;
+    p.salary = 0;
+    p.skipPaydays = 0;
+    p.living *= RETIRE_LIVING;
+    p.tax = 0; // 勞保年金與勞退免稅
+    const early = Math.round((1 - q.factor) * 100);
+    log(state, early > 0 ? 'log_retire_early' : 'log_retire', { name: p.name, amount: money(Calc.pensionIncome(p)), before: money(p.salaryBefore), cut: early });
+  }
+
+  // 到了法定退休年齡：還在工作的人強制退休
   function retireAll(state) {
+    if (!state.players.some((p) => !p.bankrupt && !p.retired)) return;
     log(state, 'log_retire_all');
-    state.players.forEach((p) => {
-      if (p.bankrupt || p.retired) return;
-      p.retired = true;
-      p.salaryBefore = Math.round(p.salary);
-      p.pension.labor = Math.round((p.salary * LABOR_PENSION) / 100) * 100;
-      p.pension.fromAcct = Math.round(p.pension.acct / PENSION_MONTHS);
-      p.salary = 0;
-      p.skipPaydays = 0;
-      p.living *= RETIRE_LIVING;
-      p.tax = 0; // 勞保年金與勞退免稅
-      log(state, 'log_retire', { name: p.name, amount: money(Calc.pensionIncome(p)), before: money(p.salaryBefore) });
-    });
+    state.players.forEach((p) => { if (!p.bankrupt && !p.retired) retire(state, p); });
   }
 
   function endTurn(state) {
@@ -1279,6 +1301,14 @@ window.MT = window.MT || {};
         }
         if (action.side === 'buy') log(state, 'log_buy_mk', { name: p.name, inst: def.name, amount: money(r.amount) });
         else log(state, 'log_sell_mk', { name: p.name, inst: def.name, amount: money(r.proceeds - repay), gain: money(r.gain) });
+        checkFreedom(state, p);
+        break;
+      }
+      case 'RETIRE': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        if (!state.config.retire || p.retired) return { ok: false, error: 'bad_target' };
+        if (state.round < earliestRetire(state)) return { ok: false, error: 'too_early' };
+        retire(state, p);
         checkFreedom(state, p);
         break;
       }
@@ -1476,6 +1506,7 @@ window.MT = window.MT || {};
   MT.Engine = {
     createGame, dispatch, getCard, roundInfo, doodadCost, peek, minBid, loanPayment, checkOffer, assetValue, takeoverPrice,
     saleChance, saleQuote, SALE_FEE, upgradeInfo, ipoQuote, taxBreakdown, landTaxRate, migrate,
+    earliestRetire, earliestOf, pensionQuote, retireRoundOf,
     PREMIUM, PENSION_SELF, IPO_PE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,
     Calc, LOAN_UNIT, CHILD_COST, QUIZ_REWARD, CB_REWARD, PAYDAY_MONTHS, HAND_LIMIT, SHORT_NOTIONAL, lengthRounds,

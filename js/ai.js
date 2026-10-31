@@ -224,6 +224,14 @@ window.MT = window.MT || {};
         return act({ type: 'INSURE', kind: k, on: true }, tx('每月花一點保費，避免一次大損失', 'A small monthly premium beats one big loss'));
       }
     }
+    // 提早退休（FIRE）：被動收入加上打折後的年金，已經付得起退休後的支出
+    if (!m.fails.RETIRE && s.config.retire && !p.retired && s.round >= E.earliestRetire(s)) {
+      const q = E.pensionQuote(s, p);
+      const after = C.expenses(p) - p.living * 0.2 - p.tax - C.childCost(p) - C.selfPension(p);
+      if (C.realPassive(s, p) + q.total >= after * 1.1) {
+        return act({ type: 'RETIRE' }, tx('被動收入加年金已經夠生活，提早退休！', 'Passive income plus pension covers my costs — retiring early!'));
+      }
+    }
     if (!m.fails.PENSION_SELF && !p.retired && !p.pension.self && (style === 'conservative' || style === 'value' || style === 'macro') && C.cashflow(s, p) > p.salary * 0.1) {
       return act({ type: 'PENSION_SELF', on: true }, tx('勞退自提 6%：省稅又能複利，越早開始越好', 'Add 6% to my pension: tax savings and compounding — the earlier the better'));
     }
