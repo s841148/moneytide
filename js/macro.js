@@ -122,14 +122,59 @@ window.MT = window.MT || {};
     it[key] = (it[key] || 0) + v;
   }
 
-  // ── 交易：buy 以台幣金額下單；sell 以單位數下單 ──
-  function trade(state, p, id, side, amount) {
+  // 股票、ETF、債券 ETF 以「股」為單位，只能買整數股（台股 1 張 = 1,000 股）
+  function byShares(i) { return i.type === 'stock' || i.type === 'etf' || i.type === 'bond'; }
+  function lotSize(i) { return byShares(i) && i.ccy === 'TWD' ? 1000 : 1; }
+
+  // 買進 units 股要付多少台幣（含滑價與手續費）
+  function buyCost(state, id, units) {
+    const i = byId[id];
+    const fx = fxOf(state, i);
+    const p0 = state.market.prices[id];
+    const impact = (units * p0 * fx) / i.liquidity;
+    const gross = units * p0 * (1 + impact / 2) * fx;
+    return Math.ceil(gross * (1 + costs(i).buy));
+  }
+  // 現金最多買得起幾股
+  function maxShares(state, p, id) {
+    const i = byId[id];
+    let n = Math.floor(p.cash / (priceTWD(state, id) * (1 + costs(i).buy)));
+    while (n > 0 && buyCost(state, id, n) > p.cash) n -= 1;
+    return Math.max(0, n);
+  }
+
+  // ── 交易：buy 以台幣金額下單（以股計價的商品會換成整數股），或用 byUnits 指定股數；sell 以單位數下單 ──
+  function trade(state, p, id, side, amount, byUnits) {
     if (!isTradable(state, id)) return { error: 'bad_phase' };
     const i = byId[id];
     const fx = fxOf(state, i);
     const c = costs(i);
     const fixed = i.type === 'deposit' || i.type === 'fx';
     const p0 = state.market.prices[id];
+
+    if (side === 'buy' && (byUnits || byShares(i))) {
+      let units;
+      if (byUnits) units = Math.floor(amount);
+      else {
+        // 用金額下單：換算成買得起的整數股
+        const budget = Math.min(Math.floor(amount), p.cash);
+        units = Math.floor((budget * (1 - c.buy)) / (p0 * fx * (1 + budget / i.liquidity / 2)));
+        while (units > 0 && buyCost(state, id, units) > budget) units -= 1;
+      }
+      if (!(units > 0)) return { error: 'bad_amount' };
+      const total = buyCost(state, id, units);
+      if (p.cash < total) return { error: 'not_enough_cash' };
+      const impact = (units * p0 * fx) / i.liquidity;
+      const p1 = p0 * (1 + impact);
+      const fee = total - Math.round(units * p0 * (1 + impact / 2) * fx);
+      state.market.prices[id] = p1;
+      state.market.pressure[id] = (state.market.pressure[id] || 0) + impact;
+      if (impact) addIntra(state, id, 'trade', impact);
+      p.cash -= total;
+      p.holdings[id] = (p.holdings[id] || 0) + units;
+      p.cost[id] = (p.cost[id] || 0) + total;
+      return { units, fee, amount: total };
+    }
 
     if (side === 'buy') {
       amount = Math.floor(amount);
@@ -523,7 +568,7 @@ window.MT = window.MT || {};
   }
 
   MT.Macro = {
-    migrate, ccyTWD,
+    migrate, ccyTWD, byShares, lotSize, buyCost, maxShares,
     init, settle, trade, applyNews, applyRate, cbDecide, cbTarget, isFrozen, rollPhase,
     available, isTradable, yieldOf, fxOf, priceTWD, holdingValue, incomeLines, dividendMonthly, costs,
     byId, LEVELS,

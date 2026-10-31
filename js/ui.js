@@ -1233,7 +1233,7 @@ window.MT = window.MT || {};
           ? (M.yieldOf(g, i) * 100).toFixed(2) + '%'
           : (i.ccy === 'USD' ? '$' : '') + g.market.prices[i.id].toLocaleString('en-US', { maximumFractionDigits: i.ccy === 'USD' || g.market.prices[i.id] < 100 ? 2 : 0 });
         html += '<button class="irow" data-action="order" data-id="' + i.id + '">'
-          + '<span class="iname">' + i.icon + ' ' + esc(L(i.name)) + (held ? '<small>' + t('mk_hold') + ' ' + fmt(held) + '</small>' : '')
+          + '<span class="iname">' + i.icon + ' ' + esc(L(i.name)) + (held ? '<small>' + t('mk_hold') + ' ' + (M.byShares(i) ? holdLabel(i, p.holdings[i.id]) + ' · ' : '') + fmt(held) + '</small>' : '')
           + (M.isFrozen(g, i.id) ? '<small class="frozen">' + t('frozen_tag') + '</small>' : '') + '</span>'
           + (isCash ? '<span></span>' : spark(g.market.history[i.id].slice(-12), 54, 18))
           + '<span class="iprice">' + priceTxt + '</span>'
@@ -1304,7 +1304,9 @@ window.MT = window.MT || {};
       html += '<div class="note ' + (ratio < 1.6 ? 'bad' : '') + '">' + rich({ zh: '[[margin_trading|融資借款]]', en: '[[margin_trading|Margin loan]]' }) + ' ' + fmt(p.margin[id])
         + ' · ' + rich({ zh: '[[margin_call|維持率]]', en: '[[margin_call|Maintenance]]' }) + ' <b>' + (ratio * 100).toFixed(0) + '%</b>（' + t('od_maint_line') + '）</div>';
     }
-    if ((canTrade(g) || sellOnly) && g.players[g.current] === p && isMine(p)) {
+    if ((canTrade(g) || sellOnly) && g.players[g.current] === p && isMine(p) && M.byShares(i)) {
+      html += sharesTradeHtml(g, p, i, sellOnly, frozen, marginOK);
+    } else if ((canTrade(g) || sellOnly) && g.players[g.current] === p && isMine(p)) {
       const buyAmts = [10000, 50000, 100000, 500000];
       html += '<div class="od-trade"><div class="small">' + esc(t('od_cash', { cash: { money: p.cash } })) + '</div>'
         + (sellOnly ? '' : '<div class="od-btns"><b>' + t('od_buy') + '</b>'
@@ -1326,6 +1328,73 @@ window.MT = window.MT || {};
     UI.modal(html, 'order-modal');
     UI.orderId = id;
     MT.Gloss.flushUnlocks();
+  }
+
+  // 股票、ETF：以股（台股可以用張）下單
+  function shareLabel(i, n) {
+    const lot = M.lotSize(i);
+    if (lot > 1 && n >= lot && n % lot === 0) return t('sh_lots', { n: (n / lot).toLocaleString() });
+    return t('sh_shares', { n: Math.round(n).toLocaleString() });
+  }
+  function holdLabel(i, units) {
+    const lot = M.lotSize(i);
+    const n = Math.floor(units + 1e-9);
+    const lots = Math.floor(n / lot);
+    return lot > 1 && lots > 0
+      ? t('sh_hold_tw', { n: n.toLocaleString(), lots: lots.toLocaleString(), odd: (n % lot).toLocaleString() })
+      : t('sh_shares', { n: n.toLocaleString() });
+  }
+  function sharesTradeHtml(g, p, i, sellOnly, frozen, marginOK) {
+    const id = i.id;
+    const lot = M.lotSize(i);
+    const have = p.holdings[id] || 0;
+    const max = M.maxShares(g, p, id);
+    const presets = lot > 1 ? [10, 100, 1000, 5000] : [1, 10, 100];
+    const unitPrice = M.priceTWD(g, id);
+    const btn = (side, n, label, disabled, sub) => '<button class="btn sm" data-action="trade-sh" data-side="' + side + '" data-qty="' + n + '"' + (disabled ? ' disabled' : '') + '>'
+      + label + (sub ? '<small>' + sub + '</small>' : '') + '</button>';
+    let html = '<div class="od-trade"><div class="small">' + esc(t('od_cash', { cash: { money: p.cash } }))
+      + ' · ' + t('sh_have') + ' <b>' + holdLabel(i, have) + '</b></div>'
+      + (lot > 1 ? '<p class="small muted">' + rich(t('sh_lot_note', { price: { money: Math.round(unitPrice * lot) } })) + '</p>' : '');
+    if (!sellOnly) {
+      html += '<div class="od-btns"><b>' + t('od_buy') + '</b>'
+        + presets.map((n) => btn('buy', n, shareLabel(i, n), n > max, '≈' + fmt(M.buyCost(g, id, n)))).join('')
+        + btn('buy', max, t('sh_max', { n: max.toLocaleString() }), max <= 0)
+        + '</div>';
+    }
+    html += '<div class="od-btns"><b>' + t('od_sell') + '</b>'
+      + presets.filter((n) => n < have).map((n) => btn('sell', n, shareLabel(i, n), frozen)).join('')
+      + '<button class="btn sm" data-action="trade" data-side="sell" data-amount="all"' + (have <= 0 || frozen ? ' disabled' : '') + '>' + t('od_sell_all') + '</button></div>'
+      + '<div class="od-btns sh-custom"><b>' + t('sh_custom') + '</b><input type="number" min="1" step="1" class="sh-input" value="' + (lot > 1 ? 1000 : 10) + '"><span>' + t('sh_unit') + '</span>'
+      + (sellOnly ? '' : '<button class="btn sm primary" data-action="trade-sh" data-side="buy" data-qty="input">' + t('od_buy') + '</button>')
+      + '<button class="btn sm" data-action="trade-sh" data-side="sell" data-qty="input"' + (have <= 0 || frozen ? ' disabled' : '') + '>' + t('od_sell') + '</button>'
+      + '<small class="sh-cost muted"></small></div>'
+      + (frozen ? '<p class="note bad">' + t('frozen_until', { round: g.market.frozen[id] }) + '</p>' : '')
+      + (marginOK && !sellOnly
+        ? '<div class="od-btns"><b>' + t('od_margin') + '</b>'
+          + [10000, 50000, 100000].map((a) => '<button class="btn sm warn" data-action="trade" data-side="margin" data-amount="' + a + '"' + (p.cash < a ? ' disabled' : '') + '>' + fmt(a) + '</button>').join('') + '</div>'
+          + '<p class="small muted">' + rich(t('od_margin_note', { own: { money: 100000 }, loan: { money: 100000 * (E.MARGIN_LEVERAGE - 1) }, total: { money: 100000 * E.MARGIN_LEVERAGE } })) + '</p>'
+        : '')
+      + '</div>';
+    return html;
+  }
+  function updateShareCost() {
+    const g = UI.game;
+    const inp = document.querySelector('.sh-input');
+    const out = document.querySelector('.sh-cost');
+    if (!inp || !out || !UI.orderId) return;
+    const n = Math.max(0, Math.floor(Number(inp.value) || 0));
+    out.textContent = n > 0 ? '≈ ' + fmt(M.buyCost(g, UI.orderId, n)) : '';
+  }
+  function doTradeShares(side, qty) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const id = UI.orderId;
+    let n = qty === 'input' ? Math.floor(Number((document.querySelector('.sh-input') || {}).value) || 0) : Number(qty);
+    if (!(n > 0)) { UI.toast(esc(t('err_bad_amount')), 'err-toast', 2500); return; }
+    if (side === 'buy') act({ type: 'TRADE', id, side: 'buy', units: n });
+    else act({ type: 'TRADE', id, side: 'sell', amount: Math.min(n, p.holdings[id] || 0) });
+    if (UI.game.phase !== 'gameover') openOrder(id);
   }
 
   function doTrade(side, amount) {
@@ -1771,7 +1840,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -2036,6 +2105,7 @@ window.MT = window.MT || {};
         break;
       case 'order': openOrder(el.dataset.id); break;
       case 'trade': doTrade(el.dataset.side, el.dataset.amount); break;
+      case 'trade-sh': doTradeShares(el.dataset.side, el.dataset.qty); break;
       case 'report': renderReport(UI.game.report); break;
       case 'tile': showTileInfo(el.dataset.type); break;
     }
@@ -2072,6 +2142,7 @@ window.MT = window.MT || {};
     if (e.target.classList.contains('name-input')) UI.setup.names[Number(e.target.dataset.idx)] = e.target.value;
     if (e.target.classList.contains('seed-input')) UI.setup.seed = e.target.value;
     if (e.target.classList.contains('sell-input') && UI.sell) { UI.sell.price = Number(e.target.value); updateSellQuote(); }
+    if (e.target.classList.contains('sh-input')) updateShareCost();
     if (e.target.dataset.action === 'custom-rounds') {
       UI.setup.customRounds = Number(e.target.value);
       const span = e.target.nextElementSibling;

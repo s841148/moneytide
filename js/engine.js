@@ -1289,7 +1289,9 @@ window.MT = window.MT || {};
         }
         const repay = action.side === 'sell' && p.margin[id] && p.holdings[id]
           ? p.margin[id] * Math.min(1, action.amount / p.holdings[id]) : 0;
-        const r = M.trade(state, p, id, action.side, action.amount);
+        const r = action.side === 'buy' && action.units
+          ? M.trade(state, p, id, 'buy', action.units, true)
+          : M.trade(state, p, id, action.side, action.amount);
         if (r.error) return { ok: false, error: r.error };
         stat(p).fees += r.fee;
         if (action.side === 'sell') stat(p).realized.push({ name: def.name, gain: Math.round(r.gain), round: state.round });

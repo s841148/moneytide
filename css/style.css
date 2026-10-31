@@ -708,3 +708,9 @@ i { font-style: normal; }
   body:has(#modal:not([hidden])) #toasts { z-index: 45; }
   .modal-card { padding: 18px 16px; }
 }
+
+/* 以股數下單 */
+.od-btns .btn small { display: block; font-size: 10.5px; font-weight: 400; opacity: .75; }
+.sh-custom { align-items: center; }
+.sh-custom .sh-input { width: 96px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.sh-custom .sh-cost { flex-basis: 100%; }
