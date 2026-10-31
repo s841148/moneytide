@@ -67,8 +67,9 @@ MT.DATA.tileTypes = {
   },
 };
 
+// 人生事件 3 格（第 2、11、22 格），平均分布在一圈裡
 MT.DATA.board = [
-  'payday', 'small', 'doodad', 'market', 'learning', 'small', 'geo', 'doodad',
+  'payday', 'small', 'life', 'market', 'learning', 'small', 'geo', 'doodad',
   'payday', 'big', 'market', 'life', 'small', 'cb', 'doodad', 'exchange',
-  'payday', 'small', 'geo', 'tax', 'big', 'learning', 'market', 'auction',
+  'payday', 'small', 'geo', 'tax', 'big', 'learning', 'life', 'auction',
 ];
