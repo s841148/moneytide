@@ -690,3 +690,10 @@ i { font-style: normal; }
 .tax-bill { margin: 8px 0; }
 .tax-bill .srow small { font-weight: 400; }
 #statement .note { background: var(--terminal-2); color: var(--terminal-ink); }
+
+/* 存檔欄位 */
+.sv-slots { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+.sv-slot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.sv-slot-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 180px; }
+.sv-slot-info small { font-size: 12px; }
+.sv-slot-btns { display: flex; gap: 6px; flex-wrap: wrap; }

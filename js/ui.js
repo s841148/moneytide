@@ -141,18 +141,56 @@ window.MT = window.MT || {};
     return ok ? g : null;
   }
 
+  // ── 手動存檔欄位（存在這台裝置上，和自動存檔分開）──
+  const SLOT_KEY = 'mt_slots';
+  const SLOT_COUNT = 3;
+  function readSlots() {
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(SLOT_KEY) || '[]') || []; } catch (e) { list = []; }
+    while (list.length < SLOT_COUNT) list.push(null);
+    return list.slice(0, SLOT_COUNT);
+  }
+  function writeSlots(list) {
+    try { localStorage.setItem(SLOT_KEY, JSON.stringify(list)); return true; } catch (e) { return false; }
+  }
+  function slotGame(slot) {
+    try {
+      const g = E.migrate(JSON.parse(slot.data));
+      return g && g.version === E.SAVE_VERSION && g.phase !== 'gameover' ? g : null;
+    } catch (e) { return null; }
+  }
+  // inGame：遊戲中可以存到欄位；連線中不能讀取別的存檔
+  function slotsHtml(inGame) {
+    const canLoad = !MT.Net.mode;
+    return '<div class="sv-slots">' + readSlots().map((slot, i) => {
+      const info = slot
+        ? '<b>' + t('sl_name', { n: i + 1 }) + '</b><small>' + esc(t('sv_info', { round: slot.round, total: slot.total, names: slot.names })) + '</small><small class="muted">' + esc(new Date(slot.time).toLocaleString(MT.lang === 'zh' ? 'zh-TW' : 'en-US')) + '</small>'
+        : '<b>' + t('sl_name', { n: i + 1 }) + '</b><small class="muted">' + t('sl_empty') + '</small>';
+      const btns = (inGame ? '<button class="btn sm primary" data-action="slot-save" data-i="' + i + '">💾 ' + t(slot ? 'sl_overwrite' : 'sl_save') + '</button>' : '')
+        + (slot && canLoad ? '<button class="btn sm" data-action="slot-load" data-i="' + i + '">▶ ' + t('sl_load') + '</button>' : '')
+        + (slot ? '<button class="btn sm ghost" data-action="slot-del" data-i="' + i + '" aria-label="delete">🗑️</button>' : '');
+      return '<div class="sv-slot"><div class="sv-slot-info">' + info + '</div><div class="sv-slot-btns">' + btns + '</div></div>';
+    }).join('') + '</div>';
+  }
+
   function openSaveMenu() {
     const g = UI.game;
     UI.modal('<h2>💾 ' + t('sv_title') + '</h2>'
+      + '<p class="small muted">' + t('sl_auto') + '</p>'
+      + '<h3>' + t('sl_title') + '</h3>'
+      + slotsHtml(true)
+      + '<h3>' + t('sl_move') + '</h3>'
       + '<p>' + t('sv_desc') + '</p>'
       + '<p class="small muted">' + esc(t('sv_info', { round: g.round, total: g.config.rounds, names: g.players.map((p) => p.name).join('、') })) + '</p>'
-      + '<div class="sv-btns"><button class="btn primary" data-action="save-download">⬇️ ' + t('sv_download') + '</button>'
+      + '<div class="sv-btns"><button class="btn" data-action="save-download">⬇️ ' + t('sv_download') + '</button>'
       + '<button class="btn" data-action="save-copy">📋 ' + t('sv_copy') + '</button></div>'
       + '<p class="small muted">' + t('sv_how') + '</p>', 'small-modal');
   }
 
   function openImport() {
-    UI.modal('<h2>📂 ' + t('sv_import_title') + '</h2>'
+    const any = readSlots().some((x) => x);
+    UI.modal('<h2>📂 ' + t(any ? 'sl_open_btn' : 'sv_import_title') + '</h2>'
+      + (any ? '<h3>' + t('sl_title') + '</h3>' + slotsHtml(false) + '<h3>' + t('sl_from_file') + '</h3>' : '')
       + '<label class="sv-file">' + t('sv_file') + '<input type="file" accept=".json,.txt,application/json,text/plain" class="sv-file-input"></label>'
       + '<label class="sv-paste">' + t('sv_paste') + '<textarea class="sv-code" rows="5" placeholder="MTZ1:…"></textarea></label>'
       + '<div class="actions"><button class="btn primary" data-action="save-import">' + t('sv_load') + '</button></div>'
@@ -233,7 +271,7 @@ window.MT = window.MT || {};
       + '<button class="btn ghost" data-action="lang">🌐 ' + t('lang_toggle') + '</button></div></div>'
       + (hosting ? hostPanel() : '<button class="btn tutorial' + (MT.Tutorial.isDone() ? '' : ' first') + '" data-action="tutorial">🎓 ' + t('tut_start') + '<small>' + t(MT.Tutorial.isDone() ? 'tut_start_d2' : 'tut_start_d') + '</small></button>')
       + (resume ? '<button class="btn resume" data-action="resume">▶ ' + t('resume') + '</button>' : '')
-      + (hosting ? '' : '<button class="btn ghost import-btn" data-action="save-import-open">📂 ' + t('sv_import_btn') + '</button>')
+      + (hosting ? '' : '<button class="btn ghost import-btn" data-action="save-import-open">📂 ' + t(readSlots().some((x) => x) ? 'sl_open_btn' : 'sv_import_btn') + '</button>')
       + (hosting ? '' : onlinePanel())
       + '<h3>' + t('setup_players') + '</h3>'
       + seg('count', [1, 2, 3, 4].map((n) => ({ value: String(n), label: n + ' 👤' })), String(s.count))
@@ -1815,6 +1853,37 @@ window.MT = window.MT || {};
         });
         break;
       case 'save-import-open': openImport(); break;
+      case 'slot-save': {
+        const g = UI.game;
+        const list = readSlots();
+        const i = Number(el.dataset.i);
+        if (list[i] && !confirm(t('sl_confirm_over', { n: i + 1 }))) break;
+        list[i] = { time: Date.now(), round: g.round, total: g.config.rounds, names: g.players.map((p) => p.name).join('、'), data: JSON.stringify(g) };
+        if (writeSlots(list)) UI.toast(esc(t('sl_saved', { n: i + 1 })), '', 2500);
+        else UI.toast(esc(t('sl_full')), 'err-toast', 4000);
+        openSaveMenu();
+        break;
+      }
+      case 'slot-load': {
+        const slot = readSlots()[Number(el.dataset.i)];
+        const g = slot && slotGame(slot);
+        if (!g) { UI.toast(esc(t('sv_bad')), 'err-toast', 4000); break; }
+        if (UI.game && !$('#game').hidden && !confirm(t('sl_confirm_load'))) break;
+        UI.closeModal();
+        resumeGame(g);
+        saveGame();
+        UI.toast(esc(t('sv_loaded')), '', 2500);
+        break;
+      }
+      case 'slot-del': {
+        const list = readSlots();
+        const i = Number(el.dataset.i);
+        if (!confirm(t('sl_confirm_del', { n: i + 1 }))) break;
+        list[i] = null;
+        writeSlots(list);
+        if (UI.game && !$('#game').hidden) openSaveMenu(); else openImport();
+        break;
+      }
       case 'save-import': {
         const f = document.querySelector('.sv-file-input');
         const code = document.querySelector('.sv-code');
