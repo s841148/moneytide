@@ -286,7 +286,7 @@ MT.DATA.glossary = [
   { id: 'liquidity', cat: 'invest', name: { zh: '流動性', en: 'Liquidity' },
     one: { zh: '資產能多快換成現金、又不用賠價。', en: 'How quickly an asset turns into cash without losing value.' },
     analogy: { zh: '現金最快；房子要賣好幾個月，急著賣還要降價。', en: 'Cash is instant; a house takes months, and a rush sale costs you.' },
-    game: { zh: '房地產和生意很難馬上變現，所以要留一些現金應急。', en: 'Property and businesses are hard to sell fast — keep some cash.' },
+    game: { zh: '房地產和生意可以掛牌出售，但開價太高沒人買、急著賣就要降價，還要付仲介費，所以要留一些現金應急。', en: 'You can list property and businesses for sale, but ask too much and nobody buys; sell in a rush and you cut the price and pay fees. Keep some cash.' },
     mid: { zh: '交易量小的股票，大量賣出時價格會被壓低（滑價）。', en: 'Thinly traded stocks drop when you sell a lot (slippage).' },
     deep: { zh: '金融危機時常出現「流動性危機」：大家都想賣，卻沒人想買。', en: 'Crises bring liquidity crunches: everyone sells, nobody buys.' },
     related: ['emergency_fund', 'own_home'] },

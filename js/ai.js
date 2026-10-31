@@ -191,6 +191,18 @@ window.MT = window.MT || {};
     return null;
   }
 
+  // 每月倒貼現金的資產（升息或景氣差造成）：用略低於市價的價格賣掉止血
+  function sellAssets(s, p, m) {
+    if (m.fails.SELL_ASSET) return null;
+    const turnKey = s.round + '-' + s.current;
+    const a = p.assets.find((x) => E.SALE_FEE[x.kind] && x.cashflow < 0 && x.listed !== turnKey
+      && E.saleQuote(x, E.assetValue(x) * 0.95).net >= 0);
+    if (!a) return null;
+    const price = Math.round(E.assetValue(a) * 0.95 / 10000) * 10000;
+    return act({ type: 'SELL_ASSET', id: a.id, price },
+      tx('「' + a.name.zh + '」每月倒貼現金，打九五折掛牌賣掉', '"' + a.name.en + '" drains cash every month — list it 5% below value'));
+  }
+
   function buyTarget(s, p) {
     const style = p.ai.style;
     const avail = M.available(s);
@@ -389,6 +401,7 @@ window.MT = window.MT || {};
     return repayLoans(s, p, st, m)
       || payoffDebts(s, p, st, m)
       || (s.phase === 'roll' && playCards(s, p, st, lv, m))
+      || sellAssets(s, p, m)
       || sellLogic(s, p, st, lv, m)
       || (s.phase === 'action' && buyLogic(s, p, st, lv, m))
       || act({ type: s.phase === 'roll' ? 'ROLL' : 'END_TURN' });

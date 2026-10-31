@@ -522,6 +522,53 @@ window.MT = window.MT || {};
     MT.Gloss.flushUnlocks();
   }
 
+  // ── 自訂售價出售資產 ──
+  UI.sell = null;
+
+  function openSell(id) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const a = p.assets.find((x) => x.id === id);
+    if (!a) { UI.closeModal(); return; }
+    if (!UI.sell || UI.sell.id !== id) UI.sell = { id, price: E.assetValue(a) };
+    const v = E.assetValue(a);
+    const chips = [0.85, 0.95, 1, 1.1, 1.2].map((r) => '<button class="chip" data-action="sell-pct" data-val="' + r + '">' + Math.round(r * 100) + '%</button>').join('');
+    UI.modal('<h2>🏷️ ' + t('sell_title') + '：' + a.icon + ' ' + esc(L(a.name)) + '</h2>'
+      + '<div class="sell-facts">'
+      + '<div class="srow"><span>' + t('sell_value') + '</span><b>' + fmt(v) + '</b></div>'
+      + '<div class="srow"><span>' + t('sell_cost') + '</span><b>' + fmt(a.cost) + '</b></div>'
+      + (a.mortgage > 0 ? '<div class="srow"><span>' + rich(t('sell_mortgage')) + '</span><b>' + fmt(-a.mortgage) + '</b></div>' : '')
+      + '</div>'
+      + '<label class="sell-price">' + t('sell_price') + '<input type="number" min="10000" step="10000" class="sell-input" value="' + UI.sell.price + '"></label>'
+      + '<div class="chips">' + chips + '</div>'
+      + '<div class="sell-quote"></div>'
+      + '<p class="small muted">' + rich(t('sell_note')) + '</p>'
+      + '<div class="actions"><button class="btn primary" data-action="sell-confirm">' + t('sell_btn') + '</button></div>', 'small-modal');
+    updateSellQuote();
+    MT.Gloss.flushUnlocks();
+  }
+
+  // 開價變動時即時更新試算（不重畫整個視窗，避免輸入框失焦）
+  function updateSellQuote() {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const a = UI.sell && p.assets.find((x) => x.id === UI.sell.id);
+    const box = document.querySelector('.sell-quote');
+    if (!a || !box) return;
+    const price = Math.max(0, Math.round(Number(UI.sell.price) || 0));
+    const q = E.saleQuote(a, price);
+    const chance = E.saleChance(g, a, price);
+    const cls = chance >= 0.7 ? 'pos' : chance >= 0.3 ? '' : 'neg';
+    box.innerHTML = '<div class="srow"><span>' + t('sell_fee', { rate: Math.round(E.SALE_FEE[a.kind] * 100) }) + '</span><b>' + fmt(-q.fee) + '</b></div>'
+      + '<div class="srow total"><span>' + t('sell_net') + '</span><b class="' + moneyCls(q.net) + '">' + fmt(q.net) + '</b></div>'
+      + '<div class="srow"><span>' + rich(t('sell_gain')) + '</span><b class="' + moneyCls(q.gain) + '">' + fmt(q.gain) + '</b></div>'
+      + '<div class="srow"><span>' + t('sell_chance') + '</span><b class="' + cls + '">' + Math.round(chance * 100) + '%</b></div>'
+      + '<div class="bar"><div style="width:' + Math.round(chance * 100) + '%"></div></div>'
+      + (a.cashflow > 0 ? '<p class="small muted">' + esc(t('sell_cashflow', { amount: { money: a.cashflow } })) + '</p>' : '')
+      + (q.net < 0 ? '<p class="note">' + esc(t('sell_pay', { amount: { money: -q.net } })) + '</p>' : '');
+    MT.Gloss.flushUnlocks();
+  }
+
   // ── 玩家交易視窗 ──
   UI.tr = null;
 
@@ -846,7 +893,9 @@ window.MT = window.MT || {};
       const v = E.assetValue(a);
       const tag = a.underwater ? ' <span class="tag bad">' + rich({ zh: '[[negative_equity|資不抵債]]', en: '[[negative_equity|Underwater]]' }) + '</span>' : '';
       const chg = a.kind !== 'loan' && v !== a.cost ? ' <small class="' + moneyCls(v - a.cost) + '">' + pct(v / a.cost - 1) + '</small>' : '';
-      html += row(a.icon + ' ' + esc(L(a.name)) + tag, fmt(v) + chg);
+      const canSell = isCur && E.SALE_FEE[a.kind] && (g.phase !== 'resolve' || (g.pending && g.pending.type === 'deal'));
+      const sellBtn = canSell ? '<button class="btn xs" data-action="sell-open" data-id="' + a.id + '">' + t('sell') + '</button>' : '';
+      html += row(a.icon + ' ' + esc(L(a.name)) + tag, fmt(v) + chg, '', sellBtn);
     });
 
     html += '<div class="st-sub">' + rich({ zh: '[[liability|負債]]', en: '[[liability|Liabilities]]' }) + '</div>';
@@ -1258,6 +1307,7 @@ window.MT = window.MT || {};
     log_sell_mk: 'coin', log_payday: 'coin', log_payday_neg: 'loss', log_doodad: 'loss', log_tax: 'loss', log_installment: 'loss',
     log_quiz_right: 'success', log_quiz_wrong: 'wrong', log_card_gain: 'card', log_attack_stock: 'zap', log_attack_sector: 'zap',
     log_poach: 'zap', log_blocked: 'shield', log_insured: 'shield', log_hedge_pay: 'shield', log_auction_bid: 'tick',
+    log_asset_sold: 'sold', log_asset_unsold: 'wrong',
     log_debt_paid: 'happy', log_payoff: 'happy', log_loan: 'stamp', log_repay: 'stamp', log_settle: 'chime', log_trade_done: 'cash',
   };
   const SOUND_PRI = ['fanfare', 'alarm', 'siren', 'sold', 'news', 'gavel', 'success', 'wrong', 'cash', 'shield', 'zap', 'loss', 'happy', 'coin', 'card', 'stamp', 'tick', 'chime'];
@@ -1273,6 +1323,8 @@ window.MT = window.MT || {};
       case 'log_caught': MT.FX.flash('rgba(47,134,235,.3)'); return ['🚨 ' + esc(t('bn_caught', { name: P.name })), 'bad'];
       case 'log_world': return ['🌐 ' + esc(t('bn_world', { card: P.card })), 'news'];
       case 'log_auction_win': return ['🔨 ' + esc(t('bn_auction', { name: P.name })), 'good'];
+      case 'log_asset_sold': return ['🏷️ ' + esc(t('bn_sold', { name: P.name, card: P.card })), 'good'];
+      case 'log_asset_unsold': return ['🏷️ ' + esc(t('bn_unsold', { card: P.card })), 'news'];
       default: return null;
     }
   }
@@ -1434,7 +1486,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -1589,6 +1641,22 @@ window.MT = window.MT || {};
       case 'loan': act({ type: 'LOAN' }); break;
       case 'repay': act({ type: 'REPAY' }); break;
       case 'payoff': act({ type: 'PAYOFF', id: el.dataset.id }); break;
+      case 'sell-open': UI.sell = null; openSell(el.dataset.id); break;
+      case 'sell-pct': {
+        const a = UI.game.players[UI.game.current].assets.find((x) => x.id === UI.sell.id);
+        UI.sell.price = Math.round(E.assetValue(a) * Number(el.dataset.val) / 10000) * 10000;
+        const inp = document.querySelector('.sell-input');
+        if (inp) inp.value = UI.sell.price;
+        updateSellQuote();
+        break;
+      }
+      case 'sell-confirm': {
+        const sl = UI.sell;
+        UI.sell = null;
+        UI.closeModal();
+        act({ type: 'SELL_ASSET', id: sl.id, price: Math.round(Number(sl.price) || 0) });
+        break;
+      }
       case 'view':
         UI.viewPlayer = Number(el.dataset.id);
         renderPlayers();
@@ -1638,6 +1706,7 @@ window.MT = window.MT || {};
     if (e.target.classList.contains('join-code')) UI.joinCode = e.target.value.toUpperCase();
     if (e.target.classList.contains('name-input')) UI.setup.names[Number(e.target.dataset.idx)] = e.target.value;
     if (e.target.classList.contains('seed-input')) UI.setup.seed = e.target.value;
+    if (e.target.classList.contains('sell-input') && UI.sell) { UI.sell.price = Number(e.target.value); updateSellQuote(); }
     if (e.target.dataset.action === 'custom-rounds') {
       UI.setup.customRounds = Number(e.target.value);
       const span = e.target.nextElementSibling;

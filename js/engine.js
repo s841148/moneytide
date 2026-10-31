@@ -96,6 +96,25 @@ window.MT = window.MT || {};
   // 惡意併購要付給對方的錢：市價 × 1.2 − 承接的貸款
   function takeoverPrice(a) { return Math.round(assetValue(a) * 1.2) - a.mortgage; }
 
+  // ── 自訂售價出售資產 ──
+  // 仲介費／交易成本：房地產 4%、事業 5%
+  const SALE_FEE = { realestate: 0.04, business: 0.05 };
+  // 景氣好買家多、願意出高價；衰退時買家少
+  const SALE_PHASE = { recovery: 0, expansion: 0.1, overheat: 0.15, recession: -0.2 };
+
+  // 開價 price 時找到買家的機率：開價 ≤ 市價 85% 一定賣得掉，開價越高越難成交
+  function saleChance(state, a, price) {
+    const ratio = price / Math.max(1, assetValue(a));
+    if (ratio <= 0.85) return 1;
+    return Math.max(0, Math.min(1, (1.25 - ratio) / 0.4 + SALE_PHASE[state.macro.phase]));
+  }
+
+  // 成交後實拿：售價 − 仲介費 − 還清剩餘貸款（可能是負數＝要倒貼）
+  function saleQuote(a, price) {
+    const fee = Math.round(price * (SALE_FEE[a.kind] || 0.05));
+    return { fee, net: price - fee - a.mortgage, gain: price - fee - a.cost };
+  }
+
   function makeAsset(state, card, deck) {
     return {
       id: newId(state), card: card.id, deck, name: card.name, icon: card.icon, kind: card.kind,
@@ -1108,6 +1127,34 @@ window.MT = window.MT || {};
         checkFreedom(state, p);
         break;
       }
+      case 'SELL_ASSET': {
+        // 處理投資機會卡時也可以賣資產湊頭期款
+        const forDeal = state.phase === 'resolve' && state.pending && state.pending.type === 'deal';
+        if (FREE_PHASES.indexOf(state.phase) < 0 && !forDeal) return { ok: false, error: 'cant_trade' };
+        const a = p.assets.find((x) => x.id === action.id);
+        if (!a || !SALE_FEE[a.kind]) return { ok: false, error: 'bad_target' };
+        const price = Math.round(action.price);
+        if (!(price >= 10000) || price > assetValue(a) * 3) return { ok: false, error: 'bad_amount' };
+        // 每項資產每回合只能掛牌一次，沒賣掉就等下回合再試
+        const turnKey = state.round + '-' + state.current;
+        if (a.listed === turnKey) return { ok: false, error: 'already_listed' };
+        const q = saleQuote(a, price);
+        if (q.net < 0 && p.cash < -q.net) return { ok: false, error: 'not_enough_cash' };
+        a.listed = turnKey;
+        const chance = saleChance(state, a, price);
+        const sold = chance >= 1 || R.next(state) < chance;
+        if (!sold) {
+          log(state, 'log_asset_unsold', { name: p.name, card: a.name, price: money(price) });
+          break;
+        }
+        p.cash += q.net;
+        p.assets = p.assets.filter((x) => x !== a);
+        stat(p).fees += q.fee;
+        stat(p).realized.push({ name: a.name, gain: q.gain, round: state.round });
+        log(state, 'log_asset_sold', { name: p.name, card: a.name, price: money(price), net: money(q.net), gain: money(q.gain) });
+        checkFreedom(state, p);
+        break;
+      }
       case 'PLAY_CARD': {
         if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
         const r = playCard(state, p, action);
@@ -1187,6 +1234,7 @@ window.MT = window.MT || {};
 
   MT.Engine = {
     createGame, dispatch, getCard, roundInfo, doodadCost, peek, minBid, loanPayment, checkOffer, assetValue, takeoverPrice,
+    saleChance, saleQuote, SALE_FEE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,
     Calc, LOAN_UNIT, CHILD_COST, QUIZ_REWARD, CB_REWARD, PAYDAY_MONTHS, HAND_LIMIT, SHORT_NOTIONAL, lengthRounds,
   };
