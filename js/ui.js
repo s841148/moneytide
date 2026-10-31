@@ -775,7 +775,8 @@ window.MT = window.MT || {};
           + (card.installment
             ? '<button class="btn" data-action="choose" data-choice="installment">💳 ' + t('pay_install') + '<small>' + t('install_detail', { payment: { money: cost.payment }, months: card.installment.months, total: { money: cost.payment * card.installment.months } }) + '</small></button>'
             : '')
-          + '</div>';
+          + (cost.amount >= 3000 ? '<button class="btn warn" data-action="choose" data-choice="card">🔁 ' + t('card_btn') + '<small>' + t('card_detail', { min: { money: Math.max(1000, Math.round(cost.amount * 0.03)) }, apr: Math.round(E.CARD_APR * 100) }) + '</small></button>' : '')
+          + '</div>' + (cost.amount >= 3000 ? '<p class="small muted">' + rich(t('card_note')) + '</p>' : '');
       }
       case 'life': {
         const card = E.getCard('life', pend.card);
@@ -999,6 +1000,7 @@ window.MT = window.MT || {};
     let html = '<div class="st-head"><h2>' + t('statement') + '</h2><span class="muted small">' + esc(t('viewing', { name: p.name })) + '</span></div>';
     if (p.skill) html += '<p class="skill">✨ ' + t('skill') + '：<b>' + esc(L(prof.skill.name)) + '</b> — ' + esc(L(prof.skill.desc)) + '</p>';
     if (p.prof === 'sales') html += '<p class="muted small">💼 ' + t('sales_note') + '</p>';
+    html += goalHtml(g, p) + healthHtml(g, p);
 
     html += '<section class="st-block"><h3>' + rich({ zh: '[[cashflow|損益表]]（每月）', en: 'Income statement ([[cashflow|monthly]])' }) + '</h3>'
       + row(rich({ zh: '薪資（[[active_income]]）', en: 'Salary ([[active_income]])' }), fmt(p.salary))
@@ -1064,7 +1066,128 @@ window.MT = window.MT || {};
     }
     const nw = C.netWorth(g, p);
     html += row(rich({ zh: '[[net_worth]]', en: '[[net_worth]]' }), fmt(nw), 'grand ' + moneyCls(nw)) + '</section>';
-    return html + planHtml(g, p, isCur && g.phase !== 'resolve');
+    return html + homeHtml(g, p, isCur && g.phase !== 'resolve') + planHtml(g, p, isCur && g.phase !== 'resolve');
+  }
+
+  // ── 人生目標 ──
+  function goalHtml(g, p) {
+    if (!p.goal) return '';
+    const pr = E.goalProgress(g, p);
+    const bonus = g.config.victory === 'freedom' ? t('goal_bonus_free', { n: Math.round(E.GOAL_FREEDOM_BONUS * 100) }) : t('goal_bonus_nw', { amount: { money: E.GOAL_BONUS } });
+    return '<div class="goal-card' + (p.goalDone ? ' done' : '') + '"><div><b>🎯 ' + t('goal_title') + '：' + t('goal_' + p.goal) + '</b>'
+      + '<small>' + rich(t('goal_' + p.goal + '_d')) + '</small></div>'
+      + (p.goalDone ? '<span class="tag good">✓ ' + t('goal_done') + '</span>' : '<div class="bar"><div style="width:' + Math.round(pr.ratio * 100) + '%"></div></div>')
+      + '<small class="muted">' + bonus + '</small></div>';
+  }
+
+  // ── 財務健檢：紅黃綠燈 ──
+  function healthHtml(g, p) {
+    const exp = C.expenses(p);
+    const inc = C.income(g, p);
+    const debtPay = C.debtPayments(p) + C.loanPayment(p) + C.marginInterest(p);
+    const invest = Object.keys(p.holdings).map((id) => p.holdings[id] * M.priceTWD(g, id))
+      .concat(p.assets.filter((a) => a.kind !== 'loan').map((a) => E.assetValue(a)));
+    const total = invest.reduce((s, x) => s + x, 0);
+    const top = total > 0 ? Math.max.apply(null, invest) / total : null;
+    const light = (v, good, ok, higher) => (higher ? (v >= good ? 'g' : v >= ok ? 'y' : 'r') : (v <= good ? 'g' : v <= ok ? 'y' : 'r'));
+    const months = exp > 0 ? p.cash / exp : 99;
+    const debtRatio = inc > 0 ? debtPay / inc : (debtPay > 0 ? 1 : 0);
+    const saveRate = inc > 0 ? C.cashflow(g, p) / inc : -1;
+    const pol = p.policies || {};
+    const insured = pol.medical && (!p.children || pol.life) ? 'g' : pol.medical || pol.life ? 'y' : 'r';
+    const items = [
+      ['emergency', light(months, 6, 3, true), months >= 99 ? '∞' : months.toFixed(1) + t('hc_months')],
+      ['debt', light(debtRatio, 0.3, 0.45, false), Math.round(debtRatio * 100) + '%'],
+      ['save', light(saveRate, 0.2, 0.1, true), Math.round(saveRate * 100) + '%'],
+      ['ins', insured, t(insured === 'g' ? 'hc_ins_ok' : insured === 'y' ? 'hc_ins_part' : 'hc_ins_none')],
+      ['div', top == null ? 'n' : light(top, 0.4, 0.7, false), top == null ? t('hc_none') : Math.round(top * 100) + '%'],
+    ];
+    const worst = items.find((x) => x[1] === 'r') || items.find((x) => x[1] === 'y');
+    return '<div class="health"><div class="health-head">' + rich(t('hc_title')) + '</div><div class="health-grid">'
+      + items.map(([k, c, v]) => '<div class="hc hc-' + c + '"><i></i><span>' + rich(t('hc_' + k)) + '</span><b>' + v + '</b></div>').join('')
+      + '</div>' + (worst ? '<p class="small">' + rich(t('hc_tip_' + worst[0])) + '</p>' : '<p class="small">' + t('hc_all_good') + '</p>') + '</div>';
+  }
+
+  // ── 居住：租屋或買房 ──
+  function homeHtml(g, p, can) {
+    const row = (label, val, extra) => '<div class="srow"><span>' + label + '</span><b>' + val + '</b>' + (extra || '') + '</div>';
+    let html = '<section class="st-block"><h3>' + rich(t('hm_title')) + '</h3>';
+    if (p.home > 0) {
+      const q = E.homeSaleQuote(g, p);
+      html += row(rich(t('hm_value')), fmt(p.home), p.homeCost ? ' <small class="' + moneyCls(p.home - p.homeCost) + '">' + pct(p.home / p.homeCost - 1) + '</small>' : '')
+        + row(rich(t('hm_debt')), fmt(-q.debt))
+        + (can ? '<div class="loan-btns"><button class="btn sm" data-action="home-sell-open">🏷️ ' + t('hm_sell') + '</button></div>' : '');
+    } else {
+      html += '<p class="muted small">' + rich(t('hm_renting')) + '</p>'
+        + (can ? '<div class="loan-btns">' + Object.keys(E.HOMES).map((k) => '<button class="btn sm" data-action="home-open" data-kind="' + k + '">🏠 ' + t('home_' + k) + '</button>').join('') + '</div>' : '');
+    }
+    return html + '</section>';
+  }
+
+  function openHome(kind) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const q = E.homeQuote(g, p, kind);
+    const row = (label, val, cls) => '<div class="srow"><span>' + label + '</span><b class="' + (cls || '') + '">' + val + '</b></div>';
+    const cfAfter = C.cashflow(g, p) + q.change;
+    const need = q.down + q.closing;
+    UI.modal('<h2>🏠 ' + t('home_' + kind) + '</h2>'
+      + row(t('hm_price'), fmt(q.price))
+      + row(rich(t('hm_down')), fmt(q.down))
+      + row(t('hm_closing'), fmt(q.closing))
+      + row(rich(t('hm_loan', { rate: q.rate.toFixed(2) })), fmt(q.loan))
+      + row(t('hm_payment'), fmt(-q.payment), 'neg')
+      + row(t('hm_rent_saved'), '+' + fmt(q.rent), 'pos')
+      + row(t('hm_cf_change'), fmt(q.change), moneyCls(q.change))
+      + row(t('hm_cf_after'), fmt(cfAfter), 'grand ' + moneyCls(cfAfter))
+      + '<p class="small">' + rich(t('hm_note')) + '</p>'
+      + (p.cash < need ? '<p class="note bad">' + esc(t('hm_need_cash', { amount: { money: need - p.cash } })) + '</p>' : '')
+      + (cfAfter < 0 ? '<p class="note bad">' + rich(t('hm_bank_no')) + '</p>' : '')
+      + '<div class="actions"><button class="btn primary" data-action="home-buy" data-kind="' + kind + '"' + (p.cash < need || cfAfter < 0 ? ' disabled' : '') + '>' + t('hm_buy_btn') + '</button></div>', 'small-modal');
+    MT.Gloss.flushUnlocks();
+  }
+
+  function openHomeSell() {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const q = E.homeSaleQuote(g, p);
+    const row = (label, val, cls) => '<div class="srow"><span>' + label + '</span><b class="' + (cls || '') + '">' + val + '</b></div>';
+    UI.modal('<h2>🏷️ ' + t('hm_sell') + '</h2>'
+      + row(rich(t('hm_value')), fmt(q.value))
+      + row(t('hm_sell_fee'), fmt(-q.fee))
+      + row(rich(t('hm_sell_tax')), fmt(-q.tax))
+      + row(t('hm_debt'), fmt(-q.debt))
+      + row(t('sell_net'), fmt(q.net), 'grand ' + moneyCls(q.net))
+      + row(t('hm_rent_back'), fmt(-q.rent), 'neg')
+      + '<p class="small muted">' + rich(t('hm_sell_note')) + '</p>'
+      + '<div class="actions"><button class="btn primary" data-action="home-sell"' + (q.net < 0 && p.cash < -q.net ? ' disabled' : '') + '>' + t('hm_sell_btn') + '</button></div>', 'small-modal');
+    MT.Gloss.flushUnlocks();
+  }
+
+  // ── 下單視窗：定期定額與限價單 ──
+  function planOrderHtml(g, p, i) {
+    const id = i.id;
+    let html = '';
+    if (M.byShares(i) || i.type === 'fund') {
+      const cur = (p.dca || []).find((d) => d.id === id);
+      html += '<div class="od-btns"><b>📅 ' + rich(t('dca_title')) + '</b>'
+        + [0, 3000, 5000, 10000].map((a) => '<button class="chip' + ((cur ? cur.monthly : 0) === a ? ' on' : '') + '" data-action="dca-set" data-amount="' + a + '">' + (a ? fmt(a) + t('per_month') : t('dca_off')) + '</button>').join('')
+        + '</div><p class="small muted">' + rich(t('dca_note', { n: E.DCA_MAX })) + '</p>';
+    }
+    if (M.byShares(i)) {
+      const price = g.market.prices[id];
+      const ccy = i.ccy === 'USD' ? '$' : '';
+      const mine = (p.orders || []).filter((o) => o.id === id);
+      html += '<div class="od-btns lim"><b>⏱️ ' + rich(t('lim_title')) + '</b>'
+        + '<select class="lim-side"><option value="buy">' + t('lim_buy') + '</option><option value="sell"' + ((p.holdings[id] || 0) > 0 ? '' : ' disabled') + '>' + t('lim_sell') + '</option></select>'
+        + '<label>' + t('lim_price') + ' ' + ccy + '<input type="number" step="0.01" min="0.01" class="lim-price" value="' + (price * 0.95).toFixed(2) + '"></label>'
+        + '<label><input type="number" step="1" min="1" class="lim-units" value="' + (M.lotSize(i) > 1 ? 1000 : 10) + '"> ' + t('sh_unit') + '</label>'
+        + '<button class="btn sm" data-action="order-place">' + t('lim_place') + '</button></div>'
+        + '<p class="small muted">' + rich(t('lim_note', { price: ccy + price.toFixed(2), n: E.ORDER_ROUNDS })) + '</p>'
+        + (mine.length ? '<div class="lim-list">' + mine.map((o) => '<div class="srow"><span>' + t('side_' + o.side) + ' ' + o.units.toLocaleString() + ' ' + t('sh_unit') + ' @ ' + ccy + o.limit.toFixed(2) + ' <small class="muted">' + t('lim_until', { round: o.until }) + '</small></span>'
+          + '<button class="btn xs" data-action="order-cancel" data-oid="' + o.oid + '">' + t('lim_cancel') + '</button></div>').join('') + '</div>' : '');
+    }
+    return html ? '<div class="od-trade od-plan">' + html + '</div>' : '';
   }
 
   // 保險與退休規劃
@@ -1232,8 +1355,9 @@ window.MT = window.MT || {};
         const priceTxt = isCash
           ? (M.yieldOf(g, i) * 100).toFixed(2) + '%'
           : (i.ccy === 'USD' ? '$' : '') + g.market.prices[i.id].toLocaleString('en-US', { maximumFractionDigits: i.ccy === 'USD' || g.market.prices[i.id] < 100 ? 2 : 0 });
+        const tags = ((p.dca || []).some((d) => d.id === i.id) ? ' 📅' : '') + ((p.orders || []).some((o) => o.id === i.id) ? ' ⏱️' : '');
         html += '<button class="irow" data-action="order" data-id="' + i.id + '">'
-          + '<span class="iname">' + i.icon + ' ' + esc(L(i.name)) + (held ? '<small>' + t('mk_hold') + ' ' + (M.byShares(i) ? holdLabel(i, p.holdings[i.id]) + ' · ' : '') + fmt(held) + '</small>' : '')
+          + '<span class="iname">' + i.icon + ' ' + esc(L(i.name)) + tags + (held ? '<small>' + t('mk_hold') + ' ' + (M.byShares(i) ? holdLabel(i, p.holdings[i.id]) + ' · ' : '') + fmt(held) + '</small>' : '')
           + (M.isFrozen(g, i.id) ? '<small class="frozen">' + t('frozen_tag') + '</small>' : '') + '</span>'
           + (isCash ? '<span></span>' : spark(g.market.history[i.id].slice(-12), 54, 18))
           + '<span class="iprice">' + priceTxt + '</span>'
@@ -1325,6 +1449,7 @@ window.MT = window.MT || {};
     } else {
       html += '<p class="note">' + t('mk_cant') + '</p>';
     }
+    if (canTrade(g) && g.players[g.current] === p && isMine(p)) html += planOrderHtml(g, p, i);
     UI.modal(html, 'order-modal');
     UI.orderId = id;
     MT.Gloss.flushUnlocks();
@@ -1566,11 +1691,12 @@ window.MT = window.MT || {};
     const rows = g.ranking.map((id, i) => {
       const p = g.players[id];
       const prof = profOf(p);
-      return '<tr' + (i === 0 ? ' class="win"' : '') + '><td>' + (i === 0 ? '🏆' : i + 1) + '</td><td><span class="dot" style="--pc:' + p.color + '"></span>' + esc(p.name) + (p.bankrupt ? ' <span class="tag bad">' + t('bankrupt_tag') + '</span>' : '') + '</td>'
+      return '<tr' + (i === 0 ? ' class="win"' : '') + '><td>' + (i === 0 ? '🏆' : i + 1) + '</td><td><span class="dot" style="--pc:' + p.color + '"></span>' + esc(p.name) + (p.goalDone ? ' <span class="tag good" title="' + esc(t('goal_' + p.goal)) + '">🎯</span>' : '') + (p.bankrupt ? ' <span class="tag bad">' + t('bankrupt_tag') + '</span>' : '') + '</td>'
         + '<td>' + prof.icon + ' ' + esc(L(prof.name)) + '</td><td>' + fmt(C.netWorth(g, p)) + '</td><td>' + fmt(C.passive(g, p)) + '</td><td>' + (C.freedom(g, p) * 100).toFixed(0) + '%</td></tr>';
     }).join('');
     UI.modal('<h2>' + t('game_over') + '</h2><p class="lead">' + esc(head) + '</p>'
       + '<div class="table-wrap"><table class="rank"><thead><tr><th>' + t('rank') + '</th><th>' + t('player') + '</th><th>' + t('profession') + '</th><th>' + t('net_worth') + '</th><th>' + t('passive') + '</th><th>%</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      + (g.players.some((p) => p.goal) ? '<p class="small muted">' + esc(t(g.config.victory === 'freedom' ? 'goal_end_note_free' : 'goal_end_note_nw', { amount: { money: E.GOAL_BONUS }, n: Math.round(E.GOAL_FREEDOM_BONUS * 100) })) + '</p>' : '')
       + reviewHtml(g)
       + '<div class="lessons"><h3>' + t('lesson_title') + '</h3><ul><li>' + t('lesson_1') + '</li><li>' + t('lesson_2') + '</li><li>' + t('lesson_3') + '</li></ul></div>'
       + '<div class="actions">' + (MT.Net.mode === 'client' ? '<p class="muted">' + t('net_next_wait') + '</p>' : '<button class="btn primary big" data-action="play-again">' + t('play_again') + '</button>') + '</div>', 'gameover');
@@ -1654,7 +1780,8 @@ window.MT = window.MT || {};
     log_quiz_right: 'success', log_quiz_wrong: 'wrong', log_card_gain: 'card', log_attack_stock: 'zap', log_attack_sector: 'zap',
     log_poach: 'zap', log_blocked: 'shield', log_insured: 'shield', log_hedge_pay: 'shield', log_auction_bid: 'tick',
     log_asset_sold: 'sold', log_asset_unsold: 'wrong',
-    log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_retire_early: 'fanfare', log_ipo: 'fanfare',
+    log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_retire_early: 'fanfare', log_goal: 'fanfare', log_home_buy: 'sold', log_home_sell: 'cash',
+    log_dca: 'coin', log_order_fill: 'cash', log_card: 'loss', log_dca_on: 'stamp', log_order_place: 'stamp', log_ipo: 'fanfare',
     log_upgrade_ok: 'success', log_upgrade_fail: 'loss', log_upgrade_bust: 'alarm', log_insure_on: 'stamp', log_pension_on: 'stamp',
     log_debt_paid: 'happy', log_payoff: 'happy', log_loan: 'stamp', log_repay: 'stamp', log_settle: 'chime', log_trade_done: 'cash',
   };
@@ -1674,6 +1801,8 @@ window.MT = window.MT || {};
       case 'log_asset_sold': return ['🏷️ ' + esc(t('bn_sold', { name: P.name, card: P.card })), 'good'];
       case 'log_scam_bust': MT.FX.shake(); return ['🚨 ' + esc(t('bn_scam', { name: P.name, card: P.card })), 'bad'];
       case 'log_retire_all': return ['🏖️ ' + esc(t('bn_retire')), 'news'];
+      case 'log_goal': MT.FX.confetti(); return ['🎯 ' + esc(t('bn_goal', { name: P.name, goal: P.goal })), 'good'];
+      case 'log_home_buy': return ['🏠 ' + esc(t('bn_home', { name: P.name })), 'good'];
       case 'log_retire_early': return ['🏖️ ' + esc(t('bn_retire_early', { name: P.name })), 'good'];
       case 'log_ipo': MT.FX.confetti(); return ['🔔 ' + esc(t('bn_ipo', { name: P.name, card: P.card })), 'good'];
       case 'log_upgrade_ok': return ['⬆️ ' + esc(t('bn_upgrade', { name: P.name, card: P.card })), 'good'];
@@ -1840,7 +1969,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh', 'dca-set', 'order-place', 'order-cancel', 'home-open', 'home-buy', 'home-sell-open', 'home-sell'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -2057,6 +2186,20 @@ window.MT = window.MT || {};
       case 'pension-self': act({ type: 'PENSION_SELF', on: el.dataset.on === '1' }); break;
       case 'up-open': openUpgrade(el.dataset.id); break;
       case 'retire-open': openRetire(); break;
+      case 'dca-set': act({ type: 'DCA_SET', id: UI.orderId, monthly: Number(el.dataset.amount) }); openOrder(UI.orderId); break;
+      case 'order-place': {
+        const side = (document.querySelector('.lim-side') || {}).value;
+        const limit = Number((document.querySelector('.lim-price') || {}).value);
+        const units = Number((document.querySelector('.lim-units') || {}).value);
+        act({ type: 'ORDER_PLACE', id: UI.orderId, side, limit, units });
+        openOrder(UI.orderId);
+        break;
+      }
+      case 'order-cancel': act({ type: 'ORDER_CANCEL', oid: el.dataset.oid }); openOrder(UI.orderId); break;
+      case 'home-open': openHome(el.dataset.kind); break;
+      case 'home-buy': UI.closeModal(); act({ type: 'BUY_HOME', kind: el.dataset.kind }); break;
+      case 'home-sell-open': openHomeSell(); break;
+      case 'home-sell': UI.closeModal(); act({ type: 'SELL_HOME' }); break;
       case 'retire-confirm': UI.closeModal(); act({ type: 'RETIRE' }); break;
       case 'up-confirm': UI.closeModal(); act({ type: 'UPGRADE', id: el.dataset.id }); break;
       case 'ipo-open': openIpo(el.dataset.id); break;

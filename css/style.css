@@ -714,3 +714,22 @@ i { font-style: normal; }
 .sh-custom { align-items: center; }
 .sh-custom .sh-input { width: 96px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
 .sh-custom .sh-cost { flex-basis: 100%; }
+
+/* M9：人生目標、財務健檢、下單規劃 */
+.goal-card { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin: 8px 0; border-radius: 12px; background: var(--terminal-2); border: 1px solid var(--terminal-line); }
+.goal-card > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.goal-card small { font-size: 12px; color: var(--terminal-muted); }
+.goal-card.done { border-color: var(--good); }
+.health { margin: 8px 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--terminal-2); border: 1px solid var(--terminal-line); }
+.health-head { font-weight: 700; margin-bottom: 6px; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 6px; }
+.hc { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 6px; font-size: 12.5px; }
+.hc i { width: 10px; height: 10px; border-radius: 50%; background: #8892a0; }
+.hc-g i { background: #22c55e; } .hc-y i { background: #f4b400; } .hc-r i { background: #ef4444; }
+.health p { margin: 8px 0 0; color: var(--terminal-ink); }
+.od-plan { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 10px; }
+.od-btns.lim label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.od-btns.lim input, .od-btns.lim select { width: 92px; padding: 5px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.od-btns.lim select { width: auto; }
+.lim-list { margin-top: 6px; }
+.btn.warn small { display: block; font-size: 11px; font-weight: 400; }

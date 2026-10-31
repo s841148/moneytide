@@ -51,6 +51,21 @@ window.MT = window.MT || {};
   const IPO_PE = { recovery: 14, expansion: 18, overheat: 22, recession: 9 }; // 上市時市場給的本益比
   const IPO_FEE = 0.05; // 承銷與上市費用
 
+  // ── M9：定期定額、自住房、限價單、信用卡、人生目標 ──
+  const DCA_MAX = 3; // 最多 3 檔定期定額
+  const HOMES = { small: { price: 6000000, rent: 12000 }, family: { price: 12000000, rent: 20000 } }; // 房價（以房價指數 1 計）與省下的房租
+  const HOME_DOWN = 0.2; // 頭期款 2 成
+  const HOME_CLOSING = 0.02; // 契稅、代書、仲介等買房成本
+  const HOME_SELL_FEE = 0.04;
+  const HOME_SPREAD = 0.6; // 房貸利率 = 央行利率 + 0.6%
+  const ORDER_MAX = 5; // 最多同時 5 張掛單
+  const ORDER_ROUNDS = 4; // 掛單有效 4 季
+  const CARD_APR = 0.15; // 信用卡循環利率（年）
+  const CARD_MIN = 0.03; // 最低應繳 = 欠款 3%（至少 1,000）
+  const GOAL_BONUS = 1000000; // 達成人生目標：淨資產排名加 100 萬
+  const GOAL_FREEDOM_BONUS = 0.1; // 財務自由模式：進度加 10 個百分點
+  const GOALS = ['home', 'debtfree', 'passive', 'nest', 'emergency', 'boss', 'fire'];
+
   function money(n) { return { money: n }; }
 
   function log(state, key, params) {
@@ -272,7 +287,69 @@ window.MT = window.MT || {};
       policies: { medical: false, property: false, life: false },
       pension: { acct: 0, self: false, labor: 0, fromAcct: 0 },
       retired: false,
+      // homeCost：遊戲中買的房子才記買價、跟著房價指數變動；開局就有的房子維持原價（避免高薪職業優勢再擴大）
+      homeCost: 0, homeIdx: 1, homeBought: 0,
+      dca: [],
+      orders: [],
+      goal: null,
     };
+  }
+
+  // 人生目標：開局隨機抽一個（已經有房子的人不會抽到「成家」，沒有退休階段就不會抽到「提早退休」）
+  function pickGoal(state, p) {
+    const pool = GOALS.filter((g) => !(g === 'home' && p.home > 0) && !(g === 'fire' && !state.config.retire));
+    p.goal = pool[R.int(state, 0, pool.length - 1)];
+  }
+  // 回傳 { done, ratio }：ratio 是進度（0–1）
+  function goalProgress(state, p) {
+    const pr = (x) => Math.max(0, Math.min(1, x));
+    switch (p.goal) {
+      case 'home': return { done: p.home > 0, ratio: p.home > 0 ? 1 : pr(p.cash / (HOMES.small.price * state.market.reIndex * (HOME_DOWN + HOME_CLOSING))) };
+      case 'debtfree': {
+        const debt = p.liabilities.reduce((s, l) => s + (l.lender != null ? l.principal : l.balance), 0) + p.bankLoan + Calc.marginLoan(p);
+        return { done: debt <= 0 && state.round >= 8, ratio: debt <= 0 ? 1 : 0 };
+      }
+      case 'passive': return { done: Calc.realPassive(state, p) >= 30000, ratio: pr(Calc.realPassive(state, p) / 30000) };
+      case 'nest': return { done: M.holdingValue(state, p) >= 5000000, ratio: pr(M.holdingValue(state, p) / 5000000) };
+      case 'emergency': return { done: p.cash >= Calc.expenses(p) * 12, ratio: pr(p.cash / (Calc.expenses(p) * 12)) };
+      case 'boss': {
+        const best = p.assets.reduce((m, a) => Math.max(m, a.chain ? a.stage : 0), 0);
+        return { done: best >= 2 || !!p.ipoDone, ratio: p.ipoDone ? 1 : best / 2 };
+      }
+      case 'fire': return { done: !!p.retired && p.retiredRound < state.config.retireRound, ratio: p.retired ? 1 : 0 };
+      default: return { done: false, ratio: 0 };
+    }
+  }
+  function checkGoal(state, p) {
+    if (!p.goal || p.goalDone || p.bankrupt) return;
+    if (goalProgress(state, p).done) {
+      p.goalDone = state.round;
+      log(state, 'log_goal', { name: p.name, goal: { key: 'goal_' + p.goal } });
+    }
+  }
+
+  // ── 自住房 ──
+  function homeQuote(state, p, kind) {
+    const h = HOMES[kind];
+    const price = Math.round((h.price * state.market.reIndex) / 10000) * 10000;
+    const down = Math.round(price * HOME_DOWN);
+    const closing = Math.round(price * HOME_CLOSING);
+    const loan = price - down;
+    const rate = (state.macro.rate + HOME_SPREAD) / 1200;
+    const payment = loanPayment(loan, 360, rate);
+    return { kind, price, down, closing, loan, payment, rent: h.rent, change: h.rent - payment, rate: state.macro.rate + HOME_SPREAD };
+  }
+  function homeMortgage(p) { return p.liabilities.filter((l) => l.home || (l.orig && l.floating)); }
+  function homeSaleQuote(state, p) {
+    const value = p.home;
+    const fee = Math.round(value * HOME_SELL_FEE);
+    const debt = homeMortgage(p).reduce((s, l) => s + l.balance, 0);
+    const gain = value - fee - (p.homeCost || value);
+    // 自住房：持有滿 6 年，400 萬以內免稅、超過的部分 10%；未滿 6 年依一般房地合一稅
+    const held = state.round - (p.homeBought || 0);
+    const tax = gain <= 0 ? 0 : held >= 24 ? Math.round(Math.max(0, gain - 4000000) * 0.1) : Math.round(gain * landTaxRate({ bought: p.homeBought || 0 }, state.round));
+    const rent = p.homeRent || Math.round((value * 0.002) / 100) * 100;
+    return { value, fee, debt, tax, gain: gain - tax, net: value - fee - tax - debt, rent };
   }
 
   function retireRoundOf(rounds) { return rounds - Math.floor(rounds * 0.1) + 1; }
@@ -286,6 +363,10 @@ window.MT = window.MT || {};
     const labor = Math.round((p.salary * LABOR_PENSION * factor) / 100) * 100;
     const fromAcct = Math.round(p.pension.acct / PENSION_MONTHS);
     return { factor, labor, fromAcct, total: labor + fromAcct };
+  }
+
+  function loanPayment(amount, months, rate) {
+    return Math.round((amount * rate) / (1 - Math.pow(1 + rate, -months)));
   }
 
   function createGame(cfg) {
@@ -325,8 +406,11 @@ window.MT = window.MT || {};
     const equal = D.professions.find((p) => p.id === 'equal');
     cfg.players.forEach((pc, i) => {
       const prof = cfg.roleMode === 'equal' ? equal : pool[i % pool.length];
-      state.players.push(makePlayer(state, pc, i, prof, cfg.roleMode === 'skill'));
+      const p = makePlayer(state, pc, i, prof, cfg.roleMode === 'skill');
+      p.liabilities.forEach((l) => { if (l.floating && p.home > 0) l.home = true; });
+      state.players.push(p);
     });
+    state.players.forEach((p) => pickGoal(state, p));
 
     ['doodad', 'small', 'big', 'life', 'market', 'world', 'geo', 'strategy', 'quiz'].forEach((k) => { state.decks[k] = []; });
     M.init(state);
@@ -453,6 +537,7 @@ window.MT = window.MT || {};
       log(state, 'log_payday_neg', { name: p.name, amount: money(-amount) });
       payCash(state, p, -amount);
     }
+    runDca(state, p);
     // 負債依每月還款金額減少；玩家之間的借款，本金還給債權人
     p.liabilities = p.liabilities.filter((l) => {
       l.balance -= l.payment * PAYDAY_MONTHS;
@@ -474,6 +559,20 @@ window.MT = window.MT || {};
         return false;
       }
       return true;
+    });
+  }
+
+  // 定期定額：每次發薪日買進 6 個月的金額（股票換算成整數股）
+  function runDca(state, p) {
+    (p.dca || []).forEach((d) => {
+      const amount = d.monthly * PAYDAY_MONTHS;
+      if (p.cash < amount) { log(state, 'log_dca_skip', { name: p.name, inst: M.byId[d.id].name }); return; }
+      const r = M.trade(state, p, d.id, 'buy', amount);
+      if (r.error) { log(state, 'log_dca_skip', { name: p.name, inst: M.byId[d.id].name }); return; }
+      const st = stat(p);
+      st.fees += r.fee;
+      st.dca = (st.dca || 0) + r.amount;
+      log(state, 'log_dca', { name: p.name, inst: M.byId[d.id].name, amount: money(r.amount) });
     });
   }
 
@@ -516,6 +615,7 @@ window.MT = window.MT || {};
   }
 
   function checkFreedom(state, p) {
+    checkGoal(state, p);
     if (p.free || p.bankrupt || state.phase === 'gameover') return;
     const passive = Calc.realPassive(state, p);
     if (passive > 0 && passive >= Calc.expenses(p)) {
@@ -529,9 +629,10 @@ window.MT = window.MT || {};
   }
 
   function finish(state, reason) {
+    state.players.forEach((p) => checkGoal(state, p));
     const metric = state.config.victory === 'freedom'
-      ? (p) => Calc.freedom(state, p) * 1e12 + Calc.netWorth(state, p)
-      : (p) => Calc.netWorth(state, p);
+      ? (p) => (Calc.freedom(state, p) + (p.goalDone ? GOAL_FREEDOM_BONUS : 0)) * 1e12 + Calc.netWorth(state, p)
+      : (p) => Calc.netWorth(state, p) + (p.goalDone ? GOAL_BONUS : 0);
     const sorted = state.players.slice().sort((a, b) => {
       if (a.bankrupt !== b.bankrupt) return a.bankrupt ? 1 : -1;
       return metric(b) - metric(a);
@@ -772,10 +873,6 @@ window.MT = window.MT || {};
     return a;
   }
 
-  function loanPayment(amount, months, rate) {
-    return Math.round((amount * rate) / (1 - Math.pow(1 + rate, -months)));
-  }
-
   // 驗證交易提案；ok 時回傳 null
   function checkOffer(state, from, to, deal) {
     if (deal.loan) {
@@ -970,7 +1067,12 @@ window.MT = window.MT || {};
         if (pend.insured) break;
         const card = getCard('doodad', pend.card);
         const cost = doodadCost(p, card);
-        if (action.choice === 'installment' && card.installment) {
+        if (action.choice === 'card') {
+          // 刷卡只繳最低應繳：欠款變成循環信用，每季加 15%／4 的利息
+          p.liabilities.push({ id: newId(state), card: true, name: { zh: '信用卡循環：' + card.name.zh, en: 'Card balance: ' + card.name.en }, balance: cost.amount, payment: Math.max(1000, Math.round(cost.amount * CARD_MIN)) });
+          stat(p).spend += cost.amount;
+          log(state, 'log_card', { name: p.name, card: card.name, amount: money(cost.amount) });
+        } else if (action.choice === 'installment' && card.installment) {
           p.liabilities.push({ id: newId(state), name: card.name, balance: cost.payment * card.installment.months, payment: cost.payment });
           stat(p).spend += cost.payment * card.installment.months;
           log(state, 'log_installment', { name: p.name, card: card.name, amount: money(cost.payment) });
@@ -1053,7 +1155,15 @@ window.MT = window.MT || {};
     state.players.forEach((p) => {
       if (p.bankrupt) return;
       p.loanRate = (m.rate + BANK_SPREAD) / 1200;
+      if (p.homeCost && p.home > 0) p.home = Math.round((p.homeCost * state.market.reIndex) / (p.homeIdx || 1));
       p.liabilities.forEach((l) => {
+        if (l.card) {
+          const interest = Math.round(l.balance * CARD_APR / 4);
+          l.balance += interest;
+          l.payment = Math.max(1000, Math.round(l.balance * CARD_MIN));
+          stat(p).interest += interest;
+          return;
+        }
         if (!l.floating) return;
         l.payment = Math.max(Math.round(l.base * 0.5), Math.round(l.base + (l.balance * (m.rate - l.rate0)) / 1200));
       });
@@ -1091,6 +1201,37 @@ window.MT = window.MT || {};
           a.value = Math.round((a.cost * state.market.reIndex) / a.reIdx);
           if (a.value < a.mortgage && !a.underwater) events.push({ id: p.id, key: 'ev_underwater', params: { card: a.name } });
           a.underwater = a.value < a.mortgage;
+        }
+        return true;
+      });
+    });
+  }
+
+  // 限價單：季結算後的價格碰到掛單價就成交；過期就取消
+  function fillOrders(state, events) {
+    state.players.forEach((p) => {
+      if (!p.orders || !p.orders.length || p.bankrupt) return;
+      p.orders = p.orders.filter((o) => {
+        const price = state.market.prices[o.id];
+        const name = M.byId[o.id].name;
+        const hit = o.side === 'buy' ? price <= o.limit : price >= o.limit;
+        if (hit) {
+          const units = o.side === 'buy' ? o.units : Math.min(o.units, p.holdings[o.id] || 0);
+          const r = units > 0 ? (o.side === 'buy' ? M.trade(state, p, o.id, 'buy', units, true) : M.trade(state, p, o.id, 'sell', units)) : { error: 'bad_amount' };
+          if (r.error) {
+            log(state, 'log_order_fail', { name: p.name, inst: name });
+            events.push({ id: p.id, key: 'ev_order_fail', params: { inst: name } });
+          } else {
+            stat(p).fees += r.fee;
+            if (o.side === 'sell') stat(p).realized.push({ name, gain: Math.round(r.gain), round: state.round });
+            log(state, 'log_order_fill', { name: p.name, inst: name, side: { key: 'side_' + o.side }, units: Math.round(r.units), amount: money(o.side === 'buy' ? r.amount : r.proceeds) });
+            events.push({ id: p.id, key: 'ev_order_fill', params: { inst: name, side: { key: 'side_' + o.side }, units: Math.round(r.units) } });
+          }
+          return false;
+        }
+        if (state.round >= o.until) {
+          log(state, 'log_order_expired', { name: p.name, inst: name });
+          return false;
         }
         return true;
       });
@@ -1149,6 +1290,7 @@ window.MT = window.MT || {};
     const events = state.roundEvents || [];
     state.roundEvents = [];
     updateEconomy(state, events);
+    fillOrders(state, events);
     marginCheck(state, events);
     // 破產淘汰制：資不抵債（淨資產比起點再少 6 個月以上的薪資）也算破產
     if (state.config.victory === 'bankrupt') {
@@ -1172,7 +1314,7 @@ window.MT = window.MT || {};
     state.history.push(snapshot(state));
     log(state, 'log_settle', roundInfo(state.round));
     makeForecast(state);
-    state.players.forEach((p) => checkFreedom(state, p));
+    state.players.forEach((p) => { checkGoal(state, p); checkFreedom(state, p); });
   }
 
   // 退休：薪水停止，改領勞保年金（提早退休打折）+ 勞退帳戶（分 20 年領）
@@ -1306,6 +1448,94 @@ window.MT = window.MT || {};
         checkFreedom(state, p);
         break;
       }
+      case 'DCA_SET': {
+        // 設定定期定額：monthly = 每月金額（0 = 取消）
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const i = M.byId[action.id];
+        if (!i || !M.isTradable(state, i.id) || !(M.byShares(i) || i.type === 'fund')) return { ok: false, error: 'bad_target' };
+        const monthly = Math.round(Number(action.monthly) || 0);
+        if (!p.dca) p.dca = [];
+        const cur = p.dca.find((d) => d.id === i.id);
+        if (monthly <= 0) {
+          if (!cur) return { ok: false, error: 'bad_target' };
+          p.dca = p.dca.filter((d) => d !== cur);
+          log(state, 'log_dca_off', { name: p.name, inst: i.name });
+          break;
+        }
+        if (monthly < 1000) return { ok: false, error: 'bad_amount' };
+        if (cur) cur.monthly = monthly;
+        else if (p.dca.length >= DCA_MAX) return { ok: false, error: 'dca_full' };
+        else p.dca.push({ id: i.id, monthly });
+        log(state, 'log_dca_on', { name: p.name, inst: i.name, amount: money(monthly) });
+        break;
+      }
+      case 'ORDER_PLACE': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const i = M.byId[action.id];
+        if (!i || !M.isTradable(state, i.id) || !M.byShares(i)) return { ok: false, error: 'bad_target' };
+        const units = Math.floor(Number(action.units) || 0);
+        const limit = Number(action.limit);
+        if (!(units > 0) || !(limit > 0) || (action.side !== 'buy' && action.side !== 'sell')) return { ok: false, error: 'bad_amount' };
+        if (action.side === 'sell' && (p.holdings[i.id] || 0) < units) return { ok: false, error: 'not_enough_shares' };
+        if (!p.orders) p.orders = [];
+        if (p.orders.length >= ORDER_MAX) return { ok: false, error: 'orders_full' };
+        p.orders.push({ oid: newId(state), id: i.id, side: action.side, units, limit: Math.round(limit * 100) / 100, until: state.round + ORDER_ROUNDS - 1 });
+        log(state, 'log_order_place', { name: p.name, inst: i.name, side: { key: 'side_' + action.side }, units, limit: limit.toFixed(2) });
+        break;
+      }
+      case 'ORDER_CANCEL': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const before = (p.orders || []).length;
+        p.orders = (p.orders || []).filter((o) => o.oid !== action.oid);
+        if (p.orders.length === before) return { ok: false, error: 'bad_target' };
+        log(state, 'log_order_cancel', { name: p.name });
+        break;
+      }
+      case 'BUY_HOME': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        if (p.home > 0 || !HOMES[action.kind]) return { ok: false, error: 'bad_target' };
+        const q = homeQuote(state, p, action.kind);
+        if (p.cash < q.down + q.closing) return { ok: false, error: 'not_enough_cash' };
+        // 銀行審核：買房後每月現金流不能是負的
+        const lid = newId(state);
+        p.liabilities.push({ id: lid, home: true, floating: true, name: { zh: '自住房貸（浮動利率）', en: 'Home mortgage (floating)' }, balance: q.loan, payment: q.payment, base: q.payment, rate0: state.macro.rate });
+        p.living -= q.rent;
+        if (Calc.cashflow(state, p) < 0) {
+          p.liabilities = p.liabilities.filter((l) => l.id !== lid);
+          p.living += q.rent;
+          return { ok: false, error: 'mortgage_denied' };
+        }
+        p.cash -= q.down + q.closing;
+        p.home = q.price;
+        p.homeCost = q.price;
+        p.homeIdx = state.market.reIndex;
+        p.homeBought = state.round;
+        p.homeRent = q.rent;
+        stat(p).fees += q.closing;
+        log(state, 'log_home_buy', { name: p.name, home: { key: 'hmn_' + action.kind }, amount: money(q.price), payment: money(q.payment) });
+        checkFreedom(state, p);
+        break;
+      }
+      case 'SELL_HOME': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        if (!(p.home > 0)) return { ok: false, error: 'bad_target' };
+        const q = homeSaleQuote(state, p);
+        if (q.net < 0 && p.cash < -q.net) return { ok: false, error: 'not_enough_cash' };
+        p.cash += q.net;
+        const ids = homeMortgage(p).map((l) => l.id);
+        p.liabilities = p.liabilities.filter((l) => ids.indexOf(l.id) < 0);
+        p.living += q.rent; // 回去租屋
+        p.home = 0;
+        p.homeCost = 0;
+        p.homeRent = 0;
+        const st = stat(p);
+        st.fees += q.fee;
+        st.tax += q.tax;
+        st.realized.push({ name: { zh: '自住房', en: 'Home' }, gain: q.gain, round: state.round });
+        log(state, 'log_home_sell', { name: p.name, amount: money(q.value), net: money(q.net), rent: money(q.rent) });
+        checkFreedom(state, p);
+        break;
+      }
       case 'RETIRE': {
         if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
         if (!state.config.retire || p.retired) return { ok: false, error: 'bad_target' };
@@ -1375,6 +1605,7 @@ window.MT = window.MT || {};
         p.assets = p.assets.filter((x) => x !== a);
         stat(p).fees += q.fee;
         stat(p).realized.push({ name: a.name, gain: q.gain, round: state.round });
+        p.ipoDone = true;
         log(state, 'log_ipo', { name: p.name, card: a.name, amount: money(q.net), pe: q.pe });
         checkFreedom(state, p);
         break;
@@ -1498,6 +1729,9 @@ window.MT = window.MT || {};
       if (!p.policies) p.policies = { medical: false, property: false, life: false };
       if (!p.pension) p.pension = { acct: 0, self: false, labor: 0, fromAcct: 0 };
       if (p.retired == null) p.retired = false;
+      if (p.homeCost == null) { p.homeCost = 0; p.homeIdx = 1; p.homeBought = 0; }
+      if (!p.dca) p.dca = [];
+      if (!p.orders) p.orders = [];
       stat(p);
       p.assets.forEach((a) => { if (a.bought == null) a.bought = 0; });
     });
@@ -1509,6 +1743,7 @@ window.MT = window.MT || {};
     createGame, dispatch, getCard, roundInfo, doodadCost, peek, minBid, loanPayment, checkOffer, assetValue, takeoverPrice,
     saleChance, saleQuote, SALE_FEE, upgradeInfo, ipoQuote, taxBreakdown, landTaxRate, migrate,
     earliestRetire, earliestOf, pensionQuote, retireRoundOf,
+    homeQuote, homeSaleQuote, goalProgress, HOMES, DCA_MAX, ORDER_MAX, ORDER_ROUNDS, CARD_APR, GOAL_BONUS, GOAL_FREEDOM_BONUS,
     PREMIUM, PENSION_SELF, IPO_PE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,
     Calc, LOAN_UNIT, CHILD_COST, QUIZ_REWARD, CB_REWARD, PAYDAY_MONTHS, HAND_LIMIT, SHORT_NOTIONAL, lengthRounds,

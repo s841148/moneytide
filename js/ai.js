@@ -232,6 +232,17 @@ window.MT = window.MT || {};
         return act({ type: 'RETIRE' }, tx('被動收入加年金已經夠生活，提早退休！', 'Passive income plus pension covers my costs — retiring early!'));
       }
     }
+    // 穩健、價值型：設定台灣 50 定期定額
+    if (!m.fails.DCA_SET && (style === 'conservative' || style === 'value') && !(p.dca || []).length && C.cashflow(s, p) > 10000) {
+      return act({ type: 'DCA_SET', id: style === 'conservative' ? 'HDIV' : 'TW50', monthly: 5000 }, tx('每月定期定額 5,000，不用猜時機', 'Invest 5,000 a month automatically — no market timing'));
+    }
+    // 穩健阿姨想要有自己的家：頭期款存夠、買了現金流還是正的
+    if (!m.fails.BUY_HOME && style === 'conservative' && !(p.home > 0)) {
+      const q = E.homeQuote(s, p, 'small');
+      if (p.cash > (q.down + q.closing) * 1.5 && C.cashflow(s, p) + q.change > C.expenses(p) * 0.15) {
+        return act({ type: 'BUY_HOME', kind: 'small' }, tx('頭期款存夠了，買間小房子自住', 'Down payment saved — buying a small home'));
+      }
+    }
     if (!m.fails.PENSION_SELF && !p.retired && !p.pension.self && (style === 'conservative' || style === 'value' || style === 'macro') && C.cashflow(s, p) > p.salary * 0.1) {
       return act({ type: 'PENSION_SELF', on: true }, tx('勞退自提 6%：省稅又能複利，越早開始越好', 'Add 6% to my pension: tax savings and compounding — the earlier the better'));
     }
@@ -430,6 +441,10 @@ window.MT = window.MT || {};
         if (pd.insured) return act({ type: 'CHOOSE', choice: 'ok' }, tx('還好有保險！', 'Glad I had insurance!'));
         const card = E.getCard('doodad', pd.card);
         const cost = E.doodadCost(p, card);
+        // 衝動型：沒有分期又現金不夠，就刷卡只繳最低
+        if (!card.installment && st.installment && p.cash < cost.amount && cost.amount >= 3000) {
+          return act({ type: 'CHOOSE', choice: 'card' }, tx('先刷卡，只繳最低應繳就好', 'Put it on the card and pay the minimum'));
+        }
         const inst = card.installment && (st.installment || p.cash < cost.amount);
         return act({ type: 'CHOOSE', choice: inst ? 'installment' : 'pay' }, inst
           ? tx('分期付款，每月只要 ' + fmt(cost.payment) + '！', 'Installments — only ' + fmt(cost.payment) + ' a month!')
