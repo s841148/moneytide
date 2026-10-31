@@ -42,11 +42,18 @@ window.MT = window.MT || {};
   function pct(x, digits) { return (x >= 0 ? '+' : '') + (x * 100).toFixed(digits == null ? 1 : digits) + '%'; }
 
   function snapshot(m) {
-    return { phase: m.phase, gdp: m.gdp, cpi: m.cpi, rate: m.rate, usRate: m.usRate, unemp: m.unemp, fx: m.fx, oil: m.oil, vix: m.vix };
+    return {
+      phase: m.phase, gdp: m.gdp, cpi: m.cpi, rate: m.rate, usRate: m.usRate, unemp: m.unemp, fx: m.fx, oil: m.oil, vix: m.vix,
+      usdjpy: m.usdjpy, eurusd: m.eurusd, usdcny: m.usdcny,
+    };
   }
 
+  // 其他貨幣：用「對美元」的匯率表示，換成台幣時再乘上美元/台幣
+  //   usdjpy 1 美元換幾日圓、eurusd 1 歐元換幾美元、usdcny 1 美元換幾人民幣；jpRate / euRate / cnRate 各國央行利率
+  const FX_START = { usdjpy: 150, eurusd: 1.08, usdcny: 7.2, jpRate: 0.25, euRate: 2.5, cnRate: 1.5 };
+
   function init(state) {
-    state.macro = { phase: 'recovery', gdp: 2.0, cpi: 1.8, rate: 2.25, usRate: 3.75, unemp: 4.2, fx: 31.5, oil: 75, vix: 18, cbDoneRound: 0 };
+    state.macro = Object.assign({ phase: 'recovery', gdp: 2.0, cpi: 1.8, rate: 2.25, usRate: 3.75, unemp: 4.2, fx: 31.5, oil: 75, vix: 18, cbDoneRound: 0 }, FX_START);
     const prices = {}, history = {}, last = {};
     D.instruments.forEach((i) => { prices[i.id] = i.price; history[i.id] = [i.price]; last[i.id] = 0; });
     state.market = { prices, history, last, contrib: {}, pressure: {}, intra: {}, roundRateMove: 0, macroHistory: [snapshot(state.macro)], reIndex: 1 };
@@ -66,10 +73,23 @@ window.MT = window.MT || {};
     const m = state.macro;
     if (i.id === 'TD') return Math.max(0.002, (m.rate - 0.4) / 100);
     if (i.id === 'USD') return Math.max(0.002, (m.usRate - 0.4) / 100);
+    if (i.id === 'JPY') return Math.max(0.0005, (m.jpRate - 0.1) / 100);
+    if (i.id === 'EUR') return Math.max(0.002, (m.euRate - 0.4) / 100);
+    if (i.id === 'CNY') return Math.max(0.005, (m.cnRate + 0.3) / 100);
     if (i.id === 'BOND') return Math.max(0.005, (m.usRate + 0.4) / 100);
     return i.yield;
   }
-  function fxOf(state, i) { return i.ccy === 'USD' ? state.macro.fx : 1; }
+  // 1 單位外幣值多少台幣
+  function ccyTWD(m, ccy) {
+    switch (ccy) {
+      case 'USD': return m.fx;
+      case 'JPY': return m.fx / m.usdjpy;
+      case 'EUR': return m.fx * m.eurusd;
+      case 'CNY': return m.fx / m.usdcny;
+      default: return 1;
+    }
+  }
+  function fxOf(state, i) { return ccyTWD(state.macro, i.ccy); }
   function priceTWD(state, id) { return state.market.prices[id] * fxOf(state, byId[id]); }
   function holdingValue(state, p) {
     let v = 0;
@@ -188,12 +208,20 @@ window.MT = window.MT || {};
     if (x.cpi) m.cpi = clamp(m.cpi + x.cpi, -1, 10);
     if (x.gdp) m.gdp = clamp(m.gdp + x.gdp, -6, 8);
     if (x.usRate) m.usRate = r2(clamp(m.usRate + x.usRate, 0, 8));
+    moveCcy(m, x);
     // 制裁：凍結商品，期間無法賣出
     if (ef.freeze) {
       if (!state.market.frozen) state.market.frozen = {};
       for (const id in ef.freeze) state.market.frozen[id] = Math.max(state.market.frozen[id] || 0, state.round + ef.freeze[id] - 1);
     }
     return state.players.map((p, k) => ({ id: p.id, delta: Math.round(holdingValue(state, p) - before[k]) }));
+  }
+
+  // 事件對其他貨幣的衝擊：jpy / eur / cny 為該貨幣的漲跌（正數 = 升值）
+  function moveCcy(m, x) {
+    if (x.jpy) m.usdjpy = clamp(m.usdjpy / (1 + x.jpy), 100, 180);
+    if (x.eur) m.eurusd = clamp(m.eurusd * (1 + x.eur), 0.8, 1.5);
+    if (x.cny) m.usdcny = clamp(m.usdcny / (1 + x.cny), 6, 8);
   }
 
   function isFrozen(state, id) {
@@ -273,6 +301,18 @@ window.MT = window.MT || {};
       + gauss(state) * 0.01 * vm + (evm.fx || 0);
     m.fx = clamp(m.fx * (1 + dFx), 26, 36);
 
+    // 4b. 其他貨幣：日本利率很低且恐慌時日圓升值（避險），歐元跟著美歐利差，人民幣受央行管理、波動小
+    m.jpRate = r2(clamp(m.jpRate + (0.5 - m.jpRate) * 0.1 + gauss(state) * 0.05, 0, 3));
+    m.euRate = r2(clamp(m.euRate + Math.round(((m.usRate - 1) - m.euRate) * 0.3 / 0.25) * 0.25, 0, 6));
+    m.cnRate = r2(clamp(m.cnRate + (1.5 - m.cnRate) * 0.2, 0, 4));
+    const dJpy = 0.008 * (m.usRate - m.jpRate - 3) - 0.003 * (m.vix - before.vix) - 0.08 * Math.log(m.usdjpy / 140) + gauss(state) * 0.02 * vm;
+    m.usdjpy = clamp(m.usdjpy * (1 + dJpy), 100, 180);
+    const dEur = -0.006 * (m.usRate - m.euRate - 0.75) + 0.002 * (m.gdp - 2.5) - 0.08 * Math.log(m.eurusd / 1.1) + gauss(state) * 0.015 * vm;
+    m.eurusd = clamp(m.eurusd * (1 + dEur), 0.8, 1.5);
+    const dCny = 0.002 * (m.usRate - m.cnRate - 2) - 0.1 * Math.log(m.usdcny / 7) + gauss(state) * 0.005 * vm;
+    m.usdcny = clamp(m.usdcny * (1 + dCny), 6, 8);
+    moveCcy(m, evm);
+
     // 5. 商品價格
     const dRate = m.rate - rateBefore;
     const dOil = m.oil / before.oil - 1;
@@ -307,7 +347,7 @@ window.MT = window.MT || {};
       nextShock[i.id] = (c.event || 0) + (intra.news || 0) + (intra.geo || 0) + (intra.attack || 0);
       // 合併本季中途發生的變化（市場消息、央行會議、玩家買賣）
       for (const k in intra) c[k] = (c[k] || 0) + intra[k];
-      if (i.ccy === 'USD') c.fxTWD = fxRet; // 換回台幣時的匯率影響
+      if (i.ccy !== 'TWD') c.fxTWD = ccyTWD(m, i.ccy) / ccyTWD(before, i.ccy) - 1; // 換回台幣時的匯率影響
       const h = mk.history[i.id];
       mk.last[i.id] = mk.prices[i.id] / h[h.length - 1] - 1;
       h.push(mk.prices[i.id]);
@@ -468,7 +508,22 @@ window.MT = window.MT || {};
     return chains;
   }
 
+  // 舊存檔：補上其他貨幣與新商品
+  function migrate(state) {
+    const m = state.macro;
+    Object.keys(FX_START).forEach((k) => { if (m[k] == null) m[k] = FX_START[k]; });
+    const mk = state.market;
+    D.instruments.forEach((i) => {
+      if (mk.prices[i.id] != null) return;
+      mk.prices[i.id] = i.price;
+      mk.history[i.id] = [i.price];
+      mk.last[i.id] = 0;
+    });
+    (mk.macroHistory || []).forEach((h) => Object.keys(FX_START).forEach((k) => { if (h[k] == null) h[k] = m[k]; }));
+  }
+
   MT.Macro = {
+    migrate, ccyTWD,
     init, settle, trade, applyNews, applyRate, cbDecide, cbTarget, isFrozen, rollPhase,
     available, isTradable, yieldOf, fxOf, priceTWD, holdingValue, incomeLines, dividendMonthly, costs,
     byId, LEVELS,

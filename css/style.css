@@ -680,3 +680,13 @@ i { font-style: normal; }
 .sv-btns .btn { flex: 1; min-width: 150px; }
 .sv-file, .sv-paste { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-weight: 600; }
 .sv-code { width: 100%; font: 12px/1.4 ui-monospace, monospace; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); word-break: break-all; }
+
+/* M8：保險、退休、事業、詐騙、稅單 */
+.tag.stage { background: var(--primary); color: #fff; }
+.btn.xs.gold { background: #f4b400; border-color: #f4b400; color: #3a2a00; }
+.btn.xs.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.srow .btn.xs + .btn.xs { margin-left: 4px; }
+.card.scam { border: 2px solid var(--bad); }
+.tax-bill { margin: 8px 0; }
+.tax-bill .srow small { font-weight: 400; }
+#statement .note { background: var(--terminal-2); color: var(--terminal-ink); }

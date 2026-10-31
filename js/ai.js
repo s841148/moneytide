@@ -42,10 +42,19 @@ window.MT = window.MT || {};
   };
 
   // 強度：quiz 答對率、noise 做出隨機（較差）決定的機率、cb 猜央行時的誤差
+  //       scam 識破詐騙的機率
   const LEVELS = {
-    easy: { quiz: 0.5, noise: 0.35, cb: 0.6, bid: [0.8, 1.4] },
-    normal: { quiz: 0.75, noise: 0.15, cb: 0.25, bid: [0.95, 1.1] },
-    hard: { quiz: 0.95, noise: 0.03, cb: 0.05, bid: [1, 1] },
+    easy: { quiz: 0.5, noise: 0.35, cb: 0.6, bid: [0.8, 1.4], scam: 0.4 },
+    normal: { quiz: 0.75, noise: 0.15, cb: 0.25, bid: [0.95, 1.1], scam: 0.7 },
+    hard: { quiz: 0.95, noise: 0.03, cb: 0.05, bid: [1, 1], scam: 0.95 },
+  };
+  // 各性格會買的保單
+  const POLICIES = {
+    conservative: ['medical', 'property', 'life'],
+    value: ['medical', 'property'],
+    macro: ['medical'],
+    momentum: [],
+    speculator: [],
   };
 
   // 宏觀先生各階段偏好的商品
@@ -203,6 +212,45 @@ window.MT = window.MT || {};
       tx('「' + a.name.zh + '」每月倒貼現金，打九五折掛牌賣掉', '"' + a.name.en + '" drains cash every month — list it 5% below value'));
   }
 
+  // 保險與勞退自提：一開局就安排好
+  function planLogic(s, p, m) {
+    if (m.fails.INSURE && m.fails.PENSION_SELF) return null;
+    const style = p.ai.style;
+    const want = POLICIES[style].slice();
+    if (p.children > 0 && want.indexOf('life') < 0 && style !== 'speculator') want.push('life');
+    if (!m.fails.INSURE) {
+      const k = want.find((x) => !p.policies[x]);
+      if (k && p.cash > C.expenses(p)) {
+        return act({ type: 'INSURE', kind: k, on: true }, tx('每月花一點保費，避免一次大損失', 'A small monthly premium beats one big loss'));
+      }
+    }
+    if (!m.fails.PENSION_SELF && !p.retired && !p.pension.self && (style === 'conservative' || style === 'value' || style === 'macro') && C.cashflow(s, p) > p.salary * 0.1) {
+      return act({ type: 'PENSION_SELF', on: true }, tx('勞退自提 6%：省稅又能複利，越早開始越好', 'Add 6% to my pension: tax savings and compounding — the earlier the better'));
+    }
+    return null;
+  }
+
+  // 連鎖事業：景氣好時擴張，到連鎖規模就選好時機上市
+  function bizLogic(s, p, st, lv, m) {
+    if (m.fails.UPGRADE && m.fails.IPO) return null;
+    const style = p.ai.style;
+    const phase = s.macro.phase;
+    const bold = style === 'momentum' || style === 'speculator' || ((style === 'macro' || style === 'value') && phase === 'expansion');
+    for (const a of p.assets) {
+      if (!a.chain) continue;
+      if (a.stage >= 3 && !m.fails.IPO && (phase === 'expansion' || phase === 'overheat' || s.round >= s.config.rounds - 1)) {
+        const q = E.ipoQuote(s, a);
+        if (q.net > 0) return act({ type: 'IPO', id: a.id }, tx('本益比 ' + q.pe + ' 倍，趁景氣好上市！', 'P/E of ' + q.pe + ' — list while the market is hot!'));
+      }
+      const info = E.upgradeInfo(s, a);
+      if (!info || m.fails.UPGRADE || !bold || phase === 'recession') continue;
+      if (p.cash >= info.cost + C.expenses(p) * st.reserve) {
+        return act({ type: 'UPGRADE', id: a.id }, tx('擴張成「' + info.name.zh + '」，成功率 ' + Math.round(info.chance * 100) + '%', 'Expand to "' + info.name.en + '" — ' + Math.round(info.chance * 100) + '% chance'));
+      }
+    }
+    return null;
+  }
+
   function buyTarget(s, p) {
     const style = p.ai.style;
     const avail = M.available(s);
@@ -264,8 +312,15 @@ window.MT = window.MT || {};
 
   function resolveDeal(s, p, st, lv, m) {
     const pd = s.pending;
+    // 報酬高得不合理的機會：看得出來就是詐騙
+    const scam = pd.cards.map((id) => E.getCard(pd.deck, id)).find((c) => c.scam);
+    if (scam && pd.cards.length === 1 && chance(lv.scam)) {
+      return act({ type: 'CHOOSE', choice: 'pass' }, tx('「保證」高報酬？年報酬 ' + pct(dealROI(scam, scam.down)) + ' 太不合理，八成是詐騙', '"Guaranteed" ' + pct(dealROI(scam, scam.down)) + ' a year? Too good to be true — likely a scam'));
+    }
     const cards = pd.cards.map((id, i) => ({ card: E.getCard(pd.deck, id), i }))
+      .filter((x) => !(x.card.scam && pd.cards.length > 1 && chance(lv.scam)))
       .sort((a, b) => dealROI(b.card, b.card.down) - dealROI(a.card, a.card.down));
+    if (!cards.length) return act({ type: 'CHOOSE', choice: 'pass' }, tx('報酬高得不合理，不碰', 'Too good to be true — pass'));
     const best = cards[0];
     const roi = dealROI(best.card, best.card.down);
     const isBiz = best.card.kind === 'business';
@@ -400,6 +455,8 @@ window.MT = window.MT || {};
     const m = mem(s);
     return repayLoans(s, p, st, m)
       || payoffDebts(s, p, st, m)
+      || planLogic(s, p, m)
+      || (s.phase === 'action' && bizLogic(s, p, st, lv, m))
       || (s.phase === 'roll' && playCards(s, p, st, lv, m))
       || sellAssets(s, p, m)
       || sellLogic(s, p, st, lv, m)

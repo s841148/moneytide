@@ -21,7 +21,7 @@ window.MT = window.MT || {};
     rightTab: 'statement',
     lastReport: null,
     setup: {
-      count: 2, names: ['', '', '', ''], difficulty: 'easy', victory: 'freedom', length: 'medium', customRounds: 32, roleMode: 'random', seed: '',
+      count: 2, names: ['', '', '', ''], difficulty: 'easy', victory: 'freedom', length: 'medium', customRounds: 32, roleMode: 'random', seed: '', retire: 'on',
       kinds: ['human', 'ai', 'ai', 'ai'], styles: ['value', 'momentum', 'conservative', 'macro'], aiLevel: 'normal', aiSpeed: 'normal',
     },
   };
@@ -99,7 +99,7 @@ window.MT = window.MT || {};
   }
   function loadSave() {
     try {
-      const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+      const s = E.migrate(JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'));
       return s && s.version === E.SAVE_VERSION && s.phase !== 'gameover' ? s : null;
     } catch (e) { return null; }
   }
@@ -136,7 +136,7 @@ window.MT = window.MT || {};
       json = await new Response(stream).text();
     } else if (s.indexOf('MTJ1:') === 0) json = new TextDecoder().decode(fromB64(s.slice(5).replace(/\s+/g, '')));
     else return null;
-    const g = JSON.parse(json);
+    const g = E.migrate(JSON.parse(json));
     const ok = g && g.version === E.SAVE_VERSION && Array.isArray(g.players) && g.config && g.macro && g.phase !== 'gameover';
     return ok ? g : null;
   }
@@ -254,6 +254,8 @@ window.MT = window.MT || {};
       + (s.length === 'custom'
         ? '<div class="custom-len"><input type="range" min="12" max="80" step="4" value="' + s.customRounds + '" data-action="custom-rounds"> <span>' + t('len_detail', { rounds, years: rounds / 4 }) + '</span></div>'
         : '')
+      + '<h3>' + t('setup_retire') + '</h3>'
+      + seg('retire', ['on', 'off'].map((v) => ({ value: v, label: t('retire_' + v), desc: v === 'on' ? t('retire_on_d', { round: rounds - Math.floor(rounds * 0.2) + 1 }) : t('retire_off_d') })), s.retire)
       + '<h3>' + t('setup_role') + '</h3>'
       + seg('roleMode', ['random', 'skill', 'equal'].map((v) => ({ value: v, label: t('role_' + v), desc: t('role_' + v + '_d') })), s.roleMode)
       + '<h3>' + t('setup_seed') + '</h3>'
@@ -348,7 +350,7 @@ window.MT = window.MT || {};
       players.push({ name: name || fallback, ai });
     }
     UI.aiSpeed = s.aiSpeed;
-    UI.game = E.createGame({ players, difficulty: s.difficulty, victory: s.victory, length: s.length, customRounds: s.customRounds, roleMode: s.roleMode, seed: s.seed });
+    UI.game = E.createGame({ players, difficulty: s.difficulty, victory: s.victory, length: s.length, customRounds: s.customRounds, roleMode: s.roleMode, seed: s.seed, retire: s.retire !== 'off' });
     UI.viewPlayer = null;
     UI.lastReport = null;
     UI.seenLog = 0;
@@ -634,10 +636,11 @@ window.MT = window.MT || {};
     const box = document.querySelector('.sell-quote');
     if (!a || !box) return;
     const price = Math.max(0, Math.round(Number(UI.sell.price) || 0));
-    const q = E.saleQuote(a, price);
+    const q = E.saleQuote(a, price, g.round);
     const chance = E.saleChance(g, a, price);
     const cls = chance >= 0.7 ? 'pos' : chance >= 0.3 ? '' : 'neg';
     box.innerHTML = '<div class="srow"><span>' + t('sell_fee', { rate: Math.round(E.SALE_FEE[a.kind] * 100) }) + '</span><b>' + fmt(-q.fee) + '</b></div>'
+      + (a.kind === 'realestate' ? '<div class="srow"><span>' + rich(t('sell_tax', { rate: Math.round(E.landTaxRate(a, g.round) * 100), q: g.round - (a.bought || 0) })) + '</span><b>' + fmt(-q.tax) + '</b></div>' : '')
       + '<div class="srow total"><span>' + t('sell_net') + '</span><b class="' + moneyCls(q.net) + '">' + fmt(q.net) + '</b></div>'
       + '<div class="srow"><span>' + rich(t('sell_gain')) + '</span><b class="' + moneyCls(q.gain) + '">' + fmt(q.gain) + '</b></div>'
       + '<div class="srow"><span>' + t('sell_chance') + '</span><b class="' + cls + '">' + Math.round(chance * 100) + '%</b></div>'
@@ -718,14 +721,18 @@ window.MT = window.MT || {};
         const card = E.getCard('doodad', pend.card);
         const cost = E.doodadCost(p, card);
         if (pend.insured) {
+          const msg = pend.insured === 'policy'
+            ? rich(t('claim_policy', { policy: t('pol_' + card.cover) }))
+            : rich({ zh: '☂️ [[insurance|保險]]卡發動：這筆意外支出由保險公司支付，你不用付錢。', en: '☂️ [[insurance|Insurance]] card used: the insurer pays this accident, so you pay nothing.' });
           return '<div class="card doodad"><div class="card-head"><span class="card-icon">' + card.icon + '</span><b>' + esc(L(card.name)) + '</b></div>'
             + '<div class="big-num"><s class="muted">' + fmt(-cost.amount) + '</s> → NT$0</div>'
-            + '<p class="note good">' + rich({ zh: '☂️ [[insurance|保險]]卡發動：這筆意外支出由保險公司支付，你不用付錢。', en: '☂️ [[insurance|Insurance]] card used: the insurer pays this accident, so you pay nothing.' }) + '</p></div>' + okBtn();
+            + '<p class="note good">' + msg + '</p></div>' + okBtn();
         }
+        const coverTip = card.cover ? '<p class="small muted">' + rich(t('claim_could', { policy: t('pol_' + card.cover) })) + '</p>' : '';
         return '<div class="card doodad"><div class="card-head"><span class="card-icon">' + card.icon + '</span><b>' + esc(L(card.name)) + '</b></div>'
           + '<div class="big-num neg">' + fmt(-cost.amount) + '</div>'
           + (p.skill === 'factory' ? '<p class="note">✨ −30%</p>' : '')
-          + '<p class="tip">💡 ' + rich(card.tip) + '</p></div>'
+          + '<p class="tip">💡 ' + rich(card.tip) + '</p>' + coverTip + '</div>'
           + '<div class="actions"><button class="btn primary" data-action="choose" data-choice="pay">' + t('pay_now') + '</button>'
           + (card.installment
             ? '<button class="btn" data-action="choose" data-choice="installment">💳 ' + t('pay_install') + '<small>' + t('install_detail', { payment: { money: cost.payment }, months: card.installment.months, total: { money: cost.payment * card.installment.months } }) + '</small></button>'
@@ -736,8 +743,16 @@ window.MT = window.MT || {};
         const card = E.getCard('life', pend.card);
         return '<div class="card life"><div class="card-head"><span class="card-icon">' + card.icon + '</span><b>' + esc(L(card.name)) + '</b></div>'
           + '<p>' + rich(card.desc) + '</p>'
-          + (pend.note ? '<p class="note good">' + t(pend.note) + '</p>' : '')
+          + (pend.note ? '<p class="note good">' + rich(t(pend.note, { policy: card.cover ? t('pol_' + card.cover) : '' })) + '</p>' : '')
+          + (!pend.note && card.cover ? '<p class="small muted">' + rich(t('claim_could', { policy: t('pol_' + card.cover) })) + '</p>' : '')
           + '</div>' + okBtn();
+      }
+      case 'scamReveal': {
+        const cards = pend.cards.map((id) => E.getCard(pend.deck, id));
+        return cards.map((c) => '<div class="card scam"><div class="card-head"><span class="card-icon">🚨</span><b>' + t('scam_title') + '</b></div>'
+          + '<p><b>' + c.icon + ' ' + esc(L(c.name)) + '</b></p>'
+          + '<p class="note good">' + t('scam_dodged') + '</p>'
+          + '<p>' + rich(c.reveal) + '</p></div>').join('') + okBtn();
       }
       case 'quiz':
       case 'quizResult': {
@@ -859,8 +874,13 @@ window.MT = window.MT || {};
         return '<div class="card"><div class="card-head"><span class="card-icon">🏦</span><b>' + t('cb_title') + '</b></div><p>' + t('cb_done') + '</p></div>' + okBtn();
       case 'tile': {
         const tt = D.tileTypes[pend.tile];
+        const bill = pend.tax
+          ? '<div class="tax-bill">' + pend.tax.items.map((x) => '<div class="srow"><span>' + rich(t(x.key)) + '<small class="muted"> · ' + fmt(x.base) + '</small></span><b>' + fmt(-x.tax) + '</b></div>').join('')
+            + '<div class="srow total"><span>' + t('tx_total') + '</span><b>' + fmt(-pend.tax.total) + '</b></div>'
+            + '<p class="small muted">' + rich(t('tx_note', { rate: Math.round(pend.tax.bracket * 100) })) + '</p></div>'
+          : '';
         return '<div class="card"><div class="card-head"><span class="card-icon">' + tt.icon + '</span><b>' + esc(L(tt.name)) + '</b></div>'
-          + (pend.params ? '<p class="note">' + t('tax_body', pend.params) + '</p>' : '')
+          + (pend.params ? '<p class="note">' + t('tax_body', pend.params) + '</p>' : '') + bill
           + '<p>' + rich(tt.desc) + '</p>'
           + (tt.milestone ? '<p class="note">' + t('coming_soon', { m: tt.milestone }) + '</p>' : '')
           + '</div>' + okBtn();
@@ -947,6 +967,7 @@ window.MT = window.MT || {};
       + row(rich({ zh: '[[passive_income]]', en: '[[passive_income]]' }), fmt(passive), 'pos');
     p.assets.forEach((a) => { html += row('<span class="indent">' + a.icon + ' ' + esc(L(a.name)) + '</span>', '+' + fmt(a.cashflow), 'sub'); });
     divs.forEach((d) => { html += row('<span class="indent">' + M.byId[d.id].icon + ' ' + esc(L(M.byId[d.id].name)) + '</span>', '+' + fmt(d.monthly), 'sub'); });
+    if (p.retired) html += row(rich({ zh: '退休金（[[labor_insurance|勞保年金]]＋[[labor_pension|勞退]]）', en: 'Pension ([[labor_insurance|state]] + [[labor_pension|account]])' }), fmt(C.pensionIncome(p)), 'pos');
     html += row(t('total_income'), fmt(C.income(g, p)), 'total')
       + row(rich({ zh: '生活費（隨[[inflation|通膨]]上升）', en: 'Living costs (rise with [[inflation]])' }), fmt(-p.living), 'neg')
       + row(rich({ zh: '[[tax|稅]]', en: '[[tax|Taxes]]' }), fmt(-p.tax), 'neg');
@@ -954,6 +975,8 @@ window.MT = window.MT || {};
     p.liabilities.forEach((l) => { html += row(esc(L(l.name)), fmt(-l.payment), 'neg'); });
     if (p.bankLoan) html += row(rich({ zh: '[[credit_loan|銀行借款]]利息', en: '[[credit_loan|Bank loan]] interest' }), fmt(-C.loanPayment(p)), 'neg');
     if (C.marginLoan(p)) html += row(rich({ zh: '[[margin_trading|融資]]利息', en: '[[margin_trading|Margin]] interest' }), fmt(-C.marginInterest(p)), 'neg');
+    if (C.premium(p)) html += row(rich({ zh: '[[insurance|保險費]]', en: '[[insurance|Insurance premiums]]' }), fmt(-C.premium(p)), 'neg');
+    if (C.selfPension(p)) html += row(rich({ zh: '[[labor_pension|勞退自提]]（存進退休帳戶）', en: '[[labor_pension|Pension top-up]] (saved)' }), fmt(-C.selfPension(p)), 'neg');
     html += row(rich({ zh: '總[[expense|支出]]', en: 'Total [[expense|expenses]]' }), fmt(-expenses), 'total')
       + row(rich({ zh: '每月[[cashflow]]', en: 'Monthly [[cashflow]]' }), fmt(cf), 'grand ' + moneyCls(cf))
       + '<div class="freedom"><div class="small">' + rich({ zh: '[[financial_freedom]]進度（被動收入 ÷ 總支出）', en: '[[financial_freedom]] progress (passive ÷ expenses)' }) + '</div>'
@@ -973,8 +996,15 @@ window.MT = window.MT || {};
       const chg = a.kind !== 'loan' && v !== a.cost ? ' <small class="' + moneyCls(v - a.cost) + '">' + pct(v / a.cost - 1) + '</small>' : '';
       const canSell = isCur && E.SALE_FEE[a.kind] && (g.phase !== 'resolve' || (g.pending && g.pending.type === 'deal'));
       const sellBtn = canSell ? '<button class="btn xs" data-action="sell-open" data-id="' + a.id + '">' + t('sell') + '</button>' : '';
-      html += row(a.icon + ' ' + esc(L(a.name)) + tag, fmt(v) + chg, '', sellBtn);
+      const free = isCur && g.phase !== 'resolve';
+      const bizBtn = free && a.chain
+        ? (a.stage >= 3 ? '<button class="btn xs gold" data-action="ipo-open" data-id="' + a.id + '">🔔 ' + t('ipo') + '</button>'
+          : '<button class="btn xs" data-action="up-open" data-id="' + a.id + '">⬆️ ' + t('upgrade') + '</button>')
+        : '';
+      const stage = a.chain ? ' <span class="tag stage">' + t('stage_n', { n: a.stage }) + '</span>' : '';
+      html += row(a.icon + ' ' + esc(L(a.name)) + stage + tag, fmt(v) + chg, '', bizBtn + sellBtn);
     });
+    if (p.pension && p.pension.acct > 0) html += row(rich({ zh: '[[labor_pension|勞退帳戶]]（退休才能領）', en: '[[labor_pension|Pension account]] (locked)' }), fmt(p.pension.acct), 'muted-row');
 
     html += '<div class="st-sub">' + rich({ zh: '[[liability|負債]]', en: '[[liability|Liabilities]]' }) + '</div>';
     p.assets.filter((a) => a.mortgage > 0).forEach((a) => { html += row(rich({ zh: '[[mortgage|房貸]]：', en: '[[mortgage|Mortgage]]: ' }) + esc(L(a.name)), fmt(-a.mortgage), 'neg'); });
@@ -996,7 +1026,77 @@ window.MT = window.MT || {};
     }
     const nw = C.netWorth(g, p);
     html += row(rich({ zh: '[[net_worth]]', en: '[[net_worth]]' }), fmt(nw), 'grand ' + moneyCls(nw)) + '</section>';
-    return html;
+    return html + planHtml(g, p, isCur && g.phase !== 'resolve');
+  }
+
+  // 保險與退休規劃
+  function planHtml(g, p, can) {
+    const row = (label, val, extra) => '<div class="srow"><span>' + label + '</span><b>' + val + '</b>' + (extra || '') + '</div>';
+    let html = '<section class="st-block"><h3>' + rich({ zh: '🛡️ [[insurance|保險]]', en: '🛡️ [[insurance|Insurance]]' }) + '</h3>';
+    ['medical', 'property', 'life'].forEach((k) => {
+      const on = p.policies && p.policies[k];
+      const btn = can ? '<button class="btn xs' + (on ? '' : ' primary') + '" data-action="insure" data-kind="' + k + '" data-on="' + (on ? '0' : '1') + '">' + t(on ? 'ins_cancel' : 'ins_buy') + '</button>' : '';
+      html += row((on ? '✅ ' : '⬜ ') + t('pol_' + k) + '<small class="muted"> · ' + t('pol_' + k + '_d') + '</small>', fmt(E.PREMIUM[k]) + t('per_month'), btn);
+    });
+    html += '<p class="muted small">' + rich(t('ins_note')) + '</p></section>';
+
+    html += '<section class="st-block"><h3>' + rich({ zh: '🏖️ 退休規劃', en: '🏖️ Retirement' }) + '</h3>';
+    if (p.retired) {
+      html += row(rich(t('ret_labor')), fmt(p.pension.labor))
+        + row(rich(t('ret_acct')), fmt(p.pension.acct > 0 ? p.pension.fromAcct : 0))
+        + row(t('ret_left'), fmt(p.pension.acct))
+        + '<p class="muted small">' + rich(t('ret_note_retired')) + '</p>';
+    } else {
+      const left = g.config.retire ? g.config.retireRound - g.round : null;
+      html += (left != null ? '<p class="note">' + t('ret_countdown', { n: left, round: g.config.retireRound }) + '</p>' : '<p class="muted small">' + t('ret_off') + '</p>')
+        + row(rich(t('ret_acct_bal')), fmt(p.pension.acct))
+        + row(t('ret_est'), fmt(Math.round((p.salary * 0.4) / 100) * 100 + Math.round(p.pension.acct / 240)) + t('per_month'))
+        + row((p.pension.self ? '✅ ' : '⬜ ') + rich(t('ret_self')), fmt(Math.round(p.salary * E.PENSION_SELF)) + t('per_month'),
+          can ? '<button class="btn xs' + (p.pension.self ? '' : ' primary') + '" data-action="pension-self" data-on="' + (p.pension.self ? '0' : '1') + '">' + t(p.pension.self ? 'ret_self_off' : 'ret_self_on') + '</button>' : '')
+        + '<p class="muted small">' + rich(t('ret_note')) + '</p>';
+    }
+    return html + '</section>';
+  }
+
+  // ── 事業升級與上市 ──
+  function openUpgrade(id) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const a = p.assets.find((x) => x.id === id);
+    const info = a && E.upgradeInfo(g, a);
+    if (!info) { UI.closeModal(); return; }
+    const row = (label, val, cls) => '<div class="srow"><span>' + label + '</span><b class="' + (cls || '') + '">' + val + '</b></div>';
+    UI.modal('<h2>⬆️ ' + t('up_title') + '</h2>'
+      + '<p class="lead">' + a.icon + ' ' + esc(L(a.name)) + ' → ' + info.icon + ' <b>' + esc(L(info.name)) + '</b></p>'
+      + row(t('up_cost'), fmt(info.cost))
+      + row(t('up_cf'), fmt(a.cashflow) + ' → ' + fmt(info.cashflow), 'pos')
+      + row(t('up_chance'), Math.round(info.chance * 100) + '%', info.chance >= 0.7 ? 'pos' : info.chance >= 0.5 ? '' : 'neg')
+      + '<div class="bar"><div style="width:' + Math.round(info.chance * 100) + '%"></div></div>'
+      + '<p class="small muted">' + rich(t('up_note')) + '</p>'
+      + '<div class="actions"><button class="btn primary" data-action="up-confirm" data-id="' + a.id + '"' + (p.cash < info.cost ? ' disabled' : '') + '>' + t('up_btn') + '</button></div>', 'small-modal');
+    MT.Gloss.flushUnlocks();
+  }
+
+  function openIpo(id) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const a = p.assets.find((x) => x.id === id);
+    if (!a) { UI.closeModal(); return; }
+    const q = E.ipoQuote(g, a);
+    const row = (label, val, cls) => '<div class="srow"><span>' + label + '</span><b class="' + (cls || '') + '">' + val + '</b></div>';
+    const pes = Object.keys(E.IPO_PE).map((k) => '<span class="chip' + (k === g.macro.phase ? ' on' : '') + '">' + D.phases[k].icon + ' ' + E.IPO_PE[k] + 'x</span>').join('');
+    UI.modal('<h2>🔔 ' + t('ipo_title') + '</h2>'
+      + '<p class="lead">' + a.icon + ' ' + esc(L(a.name)) + '</p>'
+      + row(rich(t('ipo_pe')), q.pe + 'x')
+      + row(t('ipo_value'), fmt(q.value))
+      + row(t('ipo_fee'), fmt(-q.fee))
+      + (a.mortgage > 0 ? row(t('sell_mortgage'), fmt(-a.mortgage)) : '')
+      + row(t('sell_net'), fmt(q.net), 'pos')
+      + row(rich(t('sell_gain')), fmt(q.gain), moneyCls(q.gain))
+      + '<p class="small">' + t('ipo_cycle') + '</p><div class="chips">' + pes + '</div>'
+      + '<p class="small muted">' + rich(t('ipo_note')) + '</p>'
+      + '<div class="actions"><button class="btn primary" data-action="ipo-confirm" data-id="' + a.id + '"' + (q.net <= 0 ? ' disabled' : '') + '>' + t('ipo_btn') + '</button></div>', 'small-modal');
+    MT.Gloss.flushUnlocks();
   }
 
   function macroDash(g) {
@@ -1016,6 +1116,15 @@ window.MT = window.MT || {};
         + cell(rich({ zh: '[[unemployment|失業率]]', en: '[[unemployment|Unemployment]]' }), m.unemp.toFixed(1) + '%', 'unemp')
         + cell(rich({ zh: '[[exchange_rate|美元/台幣]]', en: '[[exchange_rate|USD/TWD]]' }), m.fx.toFixed(2), 'fx')
         + cell(t('m_oil'), m.oil.toFixed(0), 'oil');
+      // 其他貨幣：顯示 1 單位外幣值多少台幣
+      const hist = g.market.macroHistory;
+      const before = prev.usdjpy ? prev : m;
+      [['JPY', 'm_jpy', 3], ['EUR', 'm_eur', 2], ['CNY', 'm_cny', 2]].forEach(([c, key, d]) => {
+        if (!M.isTradable(g, c)) return;
+        const now = M.ccyTWD(m, c);
+        html += '<div class="mcell"><span>' + t(key) + '</span><b>' + now.toFixed(d) + ' ' + arrow(now, M.ccyTWD(before, c)) + '</b>'
+          + spark(hist.filter((x) => x.usdjpy).map((x) => M.ccyTWD(x, c)), 70, 18) + '</div>';
+      });
     }
     if (lv >= 2) {
       html += cell(rich({ zh: '[[vix|VIX 恐慌指數]]', en: '[[vix|VIX]]' }), m.vix.toFixed(0), 'vix')
@@ -1089,7 +1198,7 @@ window.MT = window.MT || {};
       + (isCash ? '' : row(t('od_last'), pct(last), moneyCls(last)))
       + row(rich({ zh: '[[yield|年配息 / 利率]]', en: '[[yield|Annual yield / rate]]' }), (y * 100).toFixed(2) + '%')
       + (isCash ? '' : row(rich('[[beta]]'), i.beta.toFixed(2)))
-      + row(t('od_ccy'), i.ccy + (i.ccy === 'USD' ? ' (' + rich({ zh: '[[exchange_rate|匯率]]', en: '[[exchange_rate|FX]]' }) + ' ' + g.macro.fx.toFixed(2) + ')' : ''))
+      + row(t('od_ccy'), i.ccy + (i.ccy !== 'TWD' ? ' (' + rich({ zh: '[[exchange_rate|匯率]]', en: '[[exchange_rate|FX]]' }) + ' ' + M.ccyTWD(g.macro, i.ccy).toFixed(i.ccy === 'JPY' ? 3 : 2) + ')' : ''))
       + '</div><div>'
       + row(t('od_value'), fmt(value))
       + row(t('od_cost'), fmt(cost))
@@ -1405,6 +1514,8 @@ window.MT = window.MT || {};
     log_quiz_right: 'success', log_quiz_wrong: 'wrong', log_card_gain: 'card', log_attack_stock: 'zap', log_attack_sector: 'zap',
     log_poach: 'zap', log_blocked: 'shield', log_insured: 'shield', log_hedge_pay: 'shield', log_auction_bid: 'tick',
     log_asset_sold: 'sold', log_asset_unsold: 'wrong',
+    log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_ipo: 'fanfare',
+    log_upgrade_ok: 'success', log_upgrade_fail: 'loss', log_upgrade_bust: 'alarm', log_insure_on: 'stamp', log_pension_on: 'stamp',
     log_debt_paid: 'happy', log_payoff: 'happy', log_loan: 'stamp', log_repay: 'stamp', log_settle: 'chime', log_trade_done: 'cash',
   };
   const SOUND_PRI = ['fanfare', 'alarm', 'siren', 'sold', 'news', 'gavel', 'success', 'wrong', 'cash', 'shield', 'zap', 'loss', 'happy', 'coin', 'card', 'stamp', 'tick', 'chime'];
@@ -1421,6 +1532,11 @@ window.MT = window.MT || {};
       case 'log_world': return ['🌐 ' + esc(t('bn_world', { card: P.card })), 'news'];
       case 'log_auction_win': return ['🔨 ' + esc(t('bn_auction', { name: P.name })), 'good'];
       case 'log_asset_sold': return ['🏷️ ' + esc(t('bn_sold', { name: P.name, card: P.card })), 'good'];
+      case 'log_scam_bust': MT.FX.shake(); return ['🚨 ' + esc(t('bn_scam', { name: P.name, card: P.card })), 'bad'];
+      case 'log_retire_all': return ['🏖️ ' + esc(t('bn_retire')), 'news'];
+      case 'log_ipo': MT.FX.confetti(); return ['🔔 ' + esc(t('bn_ipo', { name: P.name, card: P.card })), 'good'];
+      case 'log_upgrade_ok': return ['⬆️ ' + esc(t('bn_upgrade', { name: P.name, card: P.card })), 'good'];
+      case 'log_upgrade_bust': MT.FX.shake(); return ['💥 ' + esc(t('bn_upgrade_bust', { card: P.card })), 'bad'];
       case 'log_asset_unsold': return ['🏷️ ' + esc(t('bn_unsold', { card: P.card })), 'news'];
       default: return null;
     }
@@ -1583,7 +1699,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -1765,6 +1881,12 @@ window.MT = window.MT || {};
       case 'repay': act({ type: 'REPAY' }); break;
       case 'payoff': act({ type: 'PAYOFF', id: el.dataset.id }); break;
       case 'sell-open': UI.sell = null; openSell(el.dataset.id); break;
+      case 'insure': act({ type: 'INSURE', kind: el.dataset.kind, on: el.dataset.on === '1' }); break;
+      case 'pension-self': act({ type: 'PENSION_SELF', on: el.dataset.on === '1' }); break;
+      case 'up-open': openUpgrade(el.dataset.id); break;
+      case 'up-confirm': UI.closeModal(); act({ type: 'UPGRADE', id: el.dataset.id }); break;
+      case 'ipo-open': openIpo(el.dataset.id); break;
+      case 'ipo-confirm': UI.closeModal(); act({ type: 'IPO', id: el.dataset.id }); break;
       case 'sell-pct': {
         const a = UI.game.players[UI.game.current].assets.find((x) => x.id === UI.sell.id);
         UI.sell.price = Math.round(E.assetValue(a) * Number(el.dataset.val) / 10000) * 10000;

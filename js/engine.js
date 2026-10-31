@@ -32,7 +32,22 @@ window.MT = window.MT || {};
   const COLORS = ['#e8505b', '#2f86eb', '#f4b400', '#22a06b'];
 
   const lengthRounds = { short: 20, medium: 32, long: 48 };
-  const SAVE_VERSION = 4; // 存檔格式版本：改動遊戲狀態結構時要加 1（畫面讀檔也用這個數字）
+  const SAVE_VERSION = 5; // 存檔格式版本：改動遊戲狀態結構時要加 1（畫面讀檔也用這個數字）
+
+  // ── 保險、退休、稅務、創業（M8）──
+  const PREMIUM = { medical: 800, property: 500, life: 1000 }; // 每月保費
+  const PENSION_EMPLOYER = 0.06; // 雇主提撥勞退 6%
+  const PENSION_SELF = 0.06; // 自提 6%
+  const PENSION_RETURN = 0.03 / 4; // 勞退帳戶每季報酬（年 3%）
+  const LABOR_PENSION = 0.4; // 勞保年金 ≈ 退休前薪資 4 成
+  const RETIRE_LIVING = 0.8; // 退休後不用通勤、應酬，生活費約剩 8 成
+  const PENSION_MONTHS = 240; // 勞退帳戶分 20 年領
+  const SAVINGS_DEDUCTION = 270000; // 每年利息免稅額
+  // 事業升級：從第 stage 階段升到下一階段的花費（× 原始價格）、現金流倍數、成功率
+  const UPGRADE = [null, { cost: 1.5, mult: 2.2, chance: 0.8 }, { cost: 5, mult: 6, chance: 0.65 }];
+  const UPGRADE_PHASE = { recovery: 0, expansion: 0.1, overheat: 0.05, recession: -0.2 };
+  const IPO_PE = { recovery: 14, expansion: 18, overheat: 22, recession: 9 }; // 上市時市場給的本益比
+  const IPO_FEE = 0.05; // 承銷與上市費用
 
   function money(n) { return { money: n }; }
 
@@ -57,16 +72,22 @@ window.MT = window.MT || {};
     assetIncome(p) { return p.assets.reduce((s, a) => s + a.cashflow, 0); },
     passive(s, p) { return Calc.assetIncome(p) + M.dividendMonthly(s, p); },
     debtPayments(p) { return p.liabilities.reduce((s, l) => s + l.payment, 0); },
-    childCost(p) { return p.children * CHILD_COST; },
-    expenses(p) { return Math.round(p.living) + p.tax + Calc.childCost(p) + Calc.debtPayments(p) + Calc.loanPayment(p) + Calc.marginInterest(p); },
-    income(s, p) { return Math.round(p.salary) + Calc.passive(s, p); },
+    childCost(p) { return p.retired ? 0 : p.children * CHILD_COST; }, // 退休時孩子已經長大
+    premium(p) { return Object.keys(PREMIUM).reduce((sum, k) => sum + (p.policies && p.policies[k] ? PREMIUM[k] : 0), 0); },
+    selfPension(p) { return p.pension && p.pension.self && !p.retired ? Math.round(p.salary * PENSION_SELF) : 0; },
+    pensionIncome(p) { return p.retired && p.pension ? p.pension.labor + (p.pension.acct > 0 ? p.pension.fromAcct : 0) : 0; },
+    scamIncome(p) { return p.assets.reduce((s, a) => s + (a.kind === 'scam' ? a.cashflow : 0), 0); },
+    expenses(p) { return Math.round(p.living) + p.tax + Calc.childCost(p) + Calc.debtPayments(p) + Calc.loanPayment(p) + Calc.marginInterest(p) + Calc.premium(p) + Calc.selfPension(p); },
+    income(s, p) { return Math.round(p.salary) + Calc.passive(s, p) + Calc.pensionIncome(p); },
     cashflow(s, p) { return Calc.income(s, p) - Calc.expenses(p); },
+    // 詐騙的「配息」不算真正的被動收入，不能拿來判定財務自由
+    realPassive(s, p) { return Calc.passive(s, p) - Calc.scamIncome(p); },
     freedom(s, p) {
       const e = Calc.expenses(p);
-      return e <= 0 ? 1 : Calc.passive(s, p) / e;
+      return e <= 0 ? 1 : Calc.realPassive(s, p) / e;
     },
     netWorth(s, p) {
-      const assets = p.cash + p.home + p.assets.reduce((sum, a) => sum + assetValue(a), 0) + M.holdingValue(s, p);
+      const assets = p.cash + p.home + p.assets.reduce((sum, a) => sum + assetValue(a), 0) + M.holdingValue(s, p) + (p.pension ? p.pension.acct : 0);
       const debts = p.bankLoan + Calc.marginLoan(p)
         + p.liabilities.filter((l) => l.lender == null).reduce((sum, l) => sum + l.balance, 0)
         + p.liabilities.filter((l) => l.lender != null).reduce((sum, l) => sum + l.principal, 0)
@@ -78,6 +99,7 @@ window.MT = window.MT || {};
   // 賽後複盤用的統計（舊存檔沒有就補上）
   function stat(p) {
     if (!p.stats) p.stats = { fees: 0, tax: 0, interest: 0, spend: 0, realized: [] };
+    if (p.stats.premium == null) { p.stats.premium = 0; p.stats.claims = 0; }
     return p.stats;
   }
 
@@ -109,18 +131,60 @@ window.MT = window.MT || {};
     return Math.max(0, Math.min(1, (1.25 - ratio) / 0.4 + SALE_PHASE[state.macro.phase]));
   }
 
-  // 成交後實拿：售價 − 仲介費 − 還清剩餘貸款（可能是負數＝要倒貼）
-  function saleQuote(a, price) {
+  // 成交後實拿：售價 − 仲介費 − 房地合一稅 − 還清剩餘貸款（可能是負數＝要倒貼）
+  function saleQuote(a, price, round) {
     const fee = Math.round(price * (SALE_FEE[a.kind] || 0.05));
-    return { fee, net: price - fee - a.mortgage, gain: price - fee - a.cost };
+    const gain = price - fee - a.cost;
+    const taxRate = a.kind === 'realestate' && round != null ? landTaxRate(a, round) : 0;
+    const tax = gain > 0 ? Math.round(gain * taxRate) : 0;
+    return { fee, tax, taxRate, net: price - fee - tax - a.mortgage, gain: gain - tax };
+  }
+
+  // ── 事業升級與上市 ──
+  function upgradeInfo(state, a) {
+    if (!a.chain || a.stage >= 3) return null;
+    const u = UPGRADE[a.stage];
+    const next = D.chains[a.chain][a.stage - 1];
+    return {
+      cost: Math.round(a.cost0 * u.cost), cashflow: Math.round(a.base0 * u.mult),
+      chance: Math.max(0.1, Math.min(0.95, u.chance + UPGRADE_PHASE[state.macro.phase])), name: next.name, icon: next.icon,
+    };
+  }
+  function ipoQuote(state, a) {
+    const pe = IPO_PE[state.macro.phase];
+    const value = Math.max(0, a.cashflow) * 12 * pe;
+    const fee = Math.round(value * IPO_FEE);
+    return { pe, value: Math.round(value), fee, net: Math.round(value) - fee - a.mortgage, gain: Math.round(value) - fee - a.cost };
+  }
+
+  // 事業倒閉：投入的錢歸零，剩下的貸款變成負債
+  function closeBusiness(state, p, a) {
+    p.assets = p.assets.filter((x) => x !== a);
+    stat(p).realized.push({ name: a.name, gain: -(a.cost - a.mortgage), round: state.round, failed: true });
+    if (a.mortgage > 0) {
+      p.liabilities.push({
+        id: newId(state), name: { zh: a.name.zh + '剩餘貸款', en: 'Leftover loan: ' + a.name.en },
+        balance: a.mortgage, payment: Math.round(a.mortgage / 180),
+      });
+    }
   }
 
   function makeAsset(state, card, deck) {
-    return {
+    const a = {
       id: newId(state), card: card.id, deck, name: card.name, icon: card.icon, kind: card.kind,
       cost: card.cost, value: card.cost, mortgage: card.cost - card.down, cashflow: card.cashflow,
       base: card.cashflow, rate0: state.macro.rate, reIdx: state.market.reIndex, risk: card.risk || 1,
+      bought: state.round,
     };
+    if (card.scam) { a.lasts = card.lasts; a.age = 0; }
+    if (card.chain) { a.chain = card.chain; a.stage = 1; a.cost0 = card.cost; a.base0 = card.cashflow; }
+    return a;
+  }
+
+  // ── 房地合一稅：持有越短稅率越高（1 回合 = 1 季）──
+  function landTaxRate(a, round) {
+    const held = round - (a.bought || 0);
+    return held < 8 ? 0.45 : held < 20 ? 0.35 : held < 40 ? 0.2 : 0.15;
   }
 
   const strategyById = {};
@@ -203,6 +267,9 @@ window.MT = window.MT || {};
       shieldUsed: false,
       bankrupt: false,
       free: false,
+      policies: { medical: false, property: false, life: false },
+      pension: { acct: 0, self: false, labor: 0, fromAcct: 0 },
+      retired: false,
     };
   }
 
@@ -219,6 +286,9 @@ window.MT = window.MT || {};
         roleMode: cfg.roleMode,
         rounds,
         seed,
+        // 退休階段：最後 2 成的回合薪水停止，改領年金
+        retire: cfg.retire !== false,
+        retireRound: rounds - Math.floor(rounds * 0.2) + 1,
       },
       rng: R.seedFrom(seed),
       round: 1,
@@ -290,7 +360,8 @@ window.MT = window.MT || {};
       p.bankLoan += loan;
       p.cash += loan;
       log(state, 'log_autoloan', { name: p.name, amount: money(loan) });
-      if (state.config.victory === 'bankrupt' && Calc.cashflow(state, p) < 0) {
+      // 退休後現金流本來就常是負的（花老本），只有資不抵債才算破產（季結算時檢查）
+      if (state.config.victory === 'bankrupt' && Calc.cashflow(state, p) < 0 && !p.retired) {
         p.cash -= amount;
         goBankrupt(state, p);
         return;
@@ -341,8 +412,18 @@ window.MT = window.MT || {};
       log(state, 'log_poached_pay', { name: p.name, amount: money(salary) });
     }
     p.poached = 0;
-    const amount = (salary + Calc.passive(state, p) - Calc.expenses(p)) * PAYDAY_MONTHS;
+    const pension = Calc.pensionIncome(p);
+    const amount = (salary + Calc.passive(state, p) + pension - Calc.expenses(p)) * PAYDAY_MONTHS;
     const st = stat(p);
+    st.premium += Calc.premium(p) * PAYDAY_MONTHS;
+    if (p.pension) {
+      if (!p.retired) {
+        // 雇主提撥 6%（加上自提 6%）存進勞退帳戶
+        p.pension.acct += Math.round(salary * (PENSION_EMPLOYER + (p.pension.self ? PENSION_SELF : 0)) * PAYDAY_MONTHS);
+      } else if (p.pension.acct > 0) {
+        p.pension.acct = Math.max(0, p.pension.acct - p.pension.fromAcct * PAYDAY_MONTHS);
+      }
+    }
     st.tax += p.tax * PAYDAY_MONTHS;
     st.interest += (Calc.loanPayment(p) + Calc.marginInterest(p)) * PAYDAY_MONTHS;
     if (p.shadow) {
@@ -389,13 +470,39 @@ window.MT = window.MT || {};
     };
   }
 
-  function taxAmount(state, p) {
-    return Math.round((p.salary * 3 * 0.05 + Math.max(0, Calc.passive(state, p)) * 3 * 0.1) / 100) * 100;
+  // 報稅季：一季（3 個月）的所得分項計稅，教「賺多少」和「實拿多少」的差別
+  function taxBreakdown(state, p) {
+    const bracket = p.salary >= 100000 ? 0.12 : 0.05; // 簡化的累進稅率
+    const items = [];
+    const add = (key, base, tax) => { if (base > 0) items.push({ key, base: Math.round(base), tax: Math.max(0, Math.round(tax)) }); };
+    // 薪資：每月已經預扣一部分，這裡是結算補繳；自提勞退的部分不用課稅
+    const salaryBase = p.salary * 3 * (p.pension && p.pension.self ? 1 - PENSION_SELF : 1);
+    add('tx_salary', salaryBase, salaryBase * (bracket === 0.12 ? 0.08 : 0.05));
+    let rent = 0, biz = 0, interest = 0;
+    p.assets.forEach((a) => {
+      if (a.cashflow <= 0) return;
+      if (a.kind === 'realestate') rent += a.cashflow * 3;
+      else if (a.kind === 'business') biz += a.cashflow * 3;
+      else if (a.kind === 'loan') interest += a.cashflow * 3;
+    });
+    add('tx_rent', rent, rent * 0.57 * bracket); // 租金可扣 43% 必要費用
+    add('tx_biz', biz, biz * bracket);
+    let div = 0;
+    M.incomeLines(state, p).forEach((l) => {
+      const t = M.byId[l.id].type;
+      if (t === 'deposit' || t === 'fx') interest += l.monthly * 3;
+      else div += l.monthly * 3;
+    });
+    add('tx_div', div, div * Math.max(0, bracket - 0.085)); // 股利可抵減 8.5%
+    add('tx_nhi', div, div * 0.0211); // 二代健保補充保費
+    add('tx_interest', interest, Math.max(0, interest - SAVINGS_DEDUCTION / 4) * bracket); // 一年 27 萬內免稅
+    const total = Math.round(items.reduce((s, x) => s + x.tax, 0) / 100) * 100;
+    return { bracket, items, total };
   }
 
   function checkFreedom(state, p) {
     if (p.free || p.bankrupt || state.phase === 'gameover') return;
-    const passive = Calc.passive(state, p);
+    const passive = Calc.realPassive(state, p);
     if (passive > 0 && passive >= Calc.expenses(p)) {
       p.free = true;
       log(state, 'log_free', { name: p.name });
@@ -512,9 +619,14 @@ window.MT = window.MT || {};
         const id = draw(state, 'doodad');
         const card = getCard('doodad', id);
         let insured = false;
-        if (card.accident && hasCard(p, 'insurance')) {
+        if (card.cover && p.policies && p.policies[card.cover]) {
+          insured = 'policy';
+          const saved = doodadCost(p, card).amount;
+          stat(p).claims += saved;
+          log(state, 'log_claim', { name: p.name, card: card.name, amount: money(saved) });
+        } else if (card.accident && hasCard(p, 'insurance')) {
           useCard(p, 'insurance');
-          insured = true;
+          insured = 'card';
           log(state, 'log_insured', { name: p.name, card: card.name });
         }
         state.pending = { type: 'doodad', card: id, insured };
@@ -523,7 +635,13 @@ window.MT = window.MT || {};
       case 'life': {
         const card = getCard('life', draw(state, 'life'));
         let note = null;
-        if (card.effect === 'layoff' && p.skill === 'civil') {
+        if (card.cover && p.policies && p.policies[card.cover]) {
+          note = 'note_policy';
+          stat(p).claims += -card.amount;
+          log(state, 'log_claim', { name: p.name, card: card.name, amount: money(-card.amount) });
+        } else if (p.retired && ['raise', 'side', 'bonus', 'layoff'].indexOf(card.effect) >= 0) {
+          note = 'note_retired';
+        } else if (card.effect === 'layoff' && p.skill === 'civil') {
           note = 'skill_civil_used';
         } else if (card.negative && p.skill === 'nurse' && !p.shieldUsed) {
           p.shieldUsed = true;
@@ -534,7 +652,7 @@ window.MT = window.MT || {};
         } else {
           applyLife(state, p, card);
         }
-        if (note) log(state, 'log_skill', { name: p.name });
+        if (note && note !== 'note_policy' && note !== 'note_retired') log(state, 'log_skill', { name: p.name });
         log(state, 'log_life', { name: p.name, card: card.name });
         state.pending = { type: 'life', card: card.id, note };
         break;
@@ -543,11 +661,12 @@ window.MT = window.MT || {};
         state.pending = { type: 'quiz', q: draw(state, 'quiz') };
         break;
       case 'tax': {
-        const amount = taxAmount(state, p);
+        const bill = taxBreakdown(state, p);
+        const amount = bill.total;
         payCash(state, p, amount);
         stat(p).tax += amount;
         log(state, 'log_tax', { name: p.name, amount: money(amount) });
-        state.pending = { type: 'tile', tile: type, params: { amount: money(amount) } };
+        state.pending = { type: 'tile', tile: type, params: { amount: money(amount) }, tax: bill };
         break;
       }
       case 'market': {
@@ -569,9 +688,12 @@ window.MT = window.MT || {};
       case 'cb':
         state.pending = state.macro.cbDoneRound === state.round ? { type: 'cbDone' } : { type: 'cb' };
         break;
-      case 'auction':
-        startAuction(state, 'big', draw(state, 'big'), p.id);
+      case 'auction': {
+        let id = draw(state, 'big');
+        for (let k = 0; k < 5 && getCard('big', id).scam; k++) id = draw(state, 'big');
+        startAuction(state, 'big', id, p.id);
         break;
+      }
       case 'exchange':
         state.pending = { type: 'exchange', card: gainCard(state, p) };
         break;
@@ -819,6 +941,12 @@ window.MT = window.MT || {};
           return null;
         } else {
           pend.cards.forEach((id) => log(state, 'log_pass', { name: p.name, card: getCard(pend.deck, id).name }));
+          const scams = pend.cards.filter((id) => getCard(pend.deck, id).scam);
+          if (scams.length) {
+            scams.forEach((id) => log(state, 'log_scam_dodged', { name: p.name, card: getCard(pend.deck, id).name }));
+            state.pending = { type: 'scamReveal', deck: pend.deck, cards: scams };
+            return null;
+          }
         }
         break;
       }
@@ -913,8 +1041,17 @@ window.MT = window.MT || {};
         if (!l.floating) return;
         l.payment = Math.max(Math.round(l.base * 0.5), Math.round(l.base + (l.balance * (m.rate - l.rate0)) / 1200));
       });
+      if (p.pension && p.pension.acct > 0) p.pension.acct = Math.round(p.pension.acct * (1 + PENSION_RETURN));
       p.assets = p.assets.filter((a) => {
         if (a.kind === 'loan') return true;
+        if (a.kind === 'scam') {
+          a.age += 1;
+          if (a.age <= a.lasts) return true;
+          log(state, 'log_scam_bust', { name: p.name, card: a.name, amount: money(a.cost) });
+          stat(p).realized.push({ name: a.name, gain: -a.cost, round: state.round, scam: true });
+          events.push({ id: p.id, key: 'ev_scam', params: { card: a.name, amount: money(a.cost) } });
+          return false;
+        }
         const rateCost = Math.round((a.mortgage * (m.rate - a.rate0)) / 1200); // 浮動房貸的利息變化
         if (a.kind === 'business') {
           if (R.next(state) < fail * a.risk) {
@@ -1001,7 +1138,7 @@ window.MT = window.MT || {};
     if (state.config.victory === 'bankrupt') {
       state.players.forEach((p) => {
         if (p.bankrupt || state.phase === 'gameover') return;
-        if (Calc.netWorth(state, p) < Math.min(0, p.nw0 || 0) - INSOLVENT_MONTHS * p.salary) {
+        if (Calc.netWorth(state, p) < Math.min(0, p.nw0 || 0) - INSOLVENT_MONTHS * (p.retired ? p.salaryBefore || 0 : p.salary)) {
           events.push({ id: p.id, key: 'ev_insolvent', params: {} });
           goBankrupt(state, p);
         }
@@ -1020,6 +1157,23 @@ window.MT = window.MT || {};
     log(state, 'log_settle', roundInfo(state.round));
     makeForecast(state);
     state.players.forEach((p) => checkFreedom(state, p));
+  }
+
+  // 進入退休階段：薪水停止，改領勞保年金 + 勞退帳戶（分 20 年領）
+  function retireAll(state) {
+    log(state, 'log_retire_all');
+    state.players.forEach((p) => {
+      if (p.bankrupt || p.retired) return;
+      p.retired = true;
+      p.salaryBefore = Math.round(p.salary);
+      p.pension.labor = Math.round((p.salary * LABOR_PENSION) / 100) * 100;
+      p.pension.fromAcct = Math.round(p.pension.acct / PENSION_MONTHS);
+      p.salary = 0;
+      p.skipPaydays = 0;
+      p.living *= RETIRE_LIVING;
+      p.tax = 0; // 勞保年金與勞退免稅
+      log(state, 'log_retire', { name: p.name, amount: money(Calc.pensionIncome(p)), before: money(p.salaryBefore) });
+    });
   }
 
   function endTurn(state) {
@@ -1045,6 +1199,7 @@ window.MT = window.MT || {};
         return;
       }
       logRound(state);
+      if (state.config.retire && state.round === state.config.retireRound) retireAll(state);
     }
     state.current = idx;
     state.phase = 'roll';
@@ -1127,6 +1282,71 @@ window.MT = window.MT || {};
         checkFreedom(state, p);
         break;
       }
+      case 'INSURE': {
+        // 保單：任何時候都能加保或退保，保費每月算進支出
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        if (!PREMIUM[action.kind]) return { ok: false, error: 'bad_target' };
+        const on = !!action.on;
+        if (p.policies[action.kind] === on) return { ok: false, error: 'bad_target' };
+        p.policies[action.kind] = on;
+        log(state, on ? 'log_insure_on' : 'log_insure_off', { name: p.name, policy: { key: 'pol_' + action.kind }, amount: money(PREMIUM[action.kind]) });
+        break;
+      }
+      case 'PENSION_SELF': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        if (p.retired || p.pension.self === !!action.on) return { ok: false, error: 'bad_target' };
+        p.pension.self = !!action.on;
+        log(state, p.pension.self ? 'log_pension_on' : 'log_pension_off', { name: p.name, amount: money(Math.round(p.salary * PENSION_SELF)) });
+        break;
+      }
+      case 'UPGRADE': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const a = p.assets.find((x) => x.id === action.id);
+        const info = a && upgradeInfo(state, a);
+        if (!info) return { ok: false, error: 'bad_target' };
+        const turnKey = state.round + '-' + state.current;
+        if (a.upTry === turnKey) return { ok: false, error: 'already_tried' };
+        if (p.cash < info.cost) return { ok: false, error: 'not_enough_cash' };
+        a.upTry = turnKey;
+        p.cash -= info.cost;
+        if (R.next(state) < info.chance) {
+          a.stage += 1;
+          a.name = info.name;
+          a.icon = info.icon;
+          a.base = info.cashflow;
+          a.cashflow = info.cashflow - Math.round((a.mortgage * (state.macro.rate - a.rate0)) / 1200);
+          a.cost += info.cost;
+          a.value = a.cost;
+          a.risk *= 1.15;
+          log(state, 'log_upgrade_ok', { name: p.name, card: a.name, amount: money(info.cashflow) });
+        } else {
+          // 擴張失敗：一半的錢收不回來，還有 1/4 的機會整個事業倒閉
+          p.cash += Math.round(info.cost / 2);
+          stat(p).realized.push({ name: info.name, gain: -Math.round(info.cost / 2), round: state.round, failed: true });
+          if (R.next(state) < 0.25) {
+            log(state, 'log_upgrade_bust', { name: p.name, card: a.name, amount: money(Math.round(info.cost / 2)) });
+            closeBusiness(state, p, a);
+          } else {
+            log(state, 'log_upgrade_fail', { name: p.name, card: a.name, amount: money(Math.round(info.cost / 2)) });
+          }
+        }
+        checkFreedom(state, p);
+        break;
+      }
+      case 'IPO': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const a = p.assets.find((x) => x.id === action.id);
+        if (!a || !a.chain || a.stage < 3) return { ok: false, error: 'bad_target' };
+        const q = ipoQuote(state, a);
+        if (q.net <= 0) return { ok: false, error: 'bad_amount' };
+        p.cash += q.net;
+        p.assets = p.assets.filter((x) => x !== a);
+        stat(p).fees += q.fee;
+        stat(p).realized.push({ name: a.name, gain: q.gain, round: state.round });
+        log(state, 'log_ipo', { name: p.name, card: a.name, amount: money(q.net), pe: q.pe });
+        checkFreedom(state, p);
+        break;
+      }
       case 'SELL_ASSET': {
         // 處理投資機會卡時也可以賣資產湊頭期款
         const forDeal = state.phase === 'resolve' && state.pending && state.pending.type === 'deal';
@@ -1138,7 +1358,7 @@ window.MT = window.MT || {};
         // 每項資產每回合只能掛牌一次，沒賣掉就等下回合再試
         const turnKey = state.round + '-' + state.current;
         if (a.listed === turnKey) return { ok: false, error: 'already_listed' };
-        const q = saleQuote(a, price);
+        const q = saleQuote(a, price, state.round);
         if (q.net < 0 && p.cash < -q.net) return { ok: false, error: 'not_enough_cash' };
         a.listed = turnKey;
         const chance = saleChance(state, a, price);
@@ -1150,6 +1370,10 @@ window.MT = window.MT || {};
         p.cash += q.net;
         p.assets = p.assets.filter((x) => x !== a);
         stat(p).fees += q.fee;
+        if (q.tax) {
+          stat(p).tax += q.tax;
+          log(state, 'log_land_tax', { name: p.name, amount: money(q.tax), rate: Math.round(q.taxRate * 100) });
+        }
         stat(p).realized.push({ name: a.name, gain: q.gain, round: state.round });
         log(state, 'log_asset_sold', { name: p.name, card: a.name, price: money(price), net: money(q.net), gain: money(q.gain) });
         checkFreedom(state, p);
@@ -1232,9 +1456,27 @@ window.MT = window.MT || {};
     return error ? { ok: false, error } : { ok: true, result };
   }
 
+  // 舊版存檔（v4）升級成 v5：補上新欄位；退休階段預設關閉，避免進行中的遊戲突然改規則
+  function migrate(s) {
+    if (!s || s.version !== 4) return s;
+    M.migrate(s);
+    s.config.retire = false;
+    s.config.retireRound = s.config.rounds + 1;
+    s.players.forEach((p) => {
+      if (!p.policies) p.policies = { medical: false, property: false, life: false };
+      if (!p.pension) p.pension = { acct: 0, self: false, labor: 0, fromAcct: 0 };
+      if (p.retired == null) p.retired = false;
+      stat(p);
+      p.assets.forEach((a) => { if (a.bought == null) a.bought = 0; });
+    });
+    s.version = 5;
+    return s;
+  }
+
   MT.Engine = {
     createGame, dispatch, getCard, roundInfo, doodadCost, peek, minBid, loanPayment, checkOffer, assetValue, takeoverPrice,
-    saleChance, saleQuote, SALE_FEE,
+    saleChance, saleQuote, SALE_FEE, upgradeInfo, ipoQuote, taxBreakdown, landTaxRate, migrate,
+    PREMIUM, PENSION_SELF, IPO_PE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,
     Calc, LOAN_UNIT, CHILD_COST, QUIZ_REWARD, CB_REWARD, PAYDAY_MONTHS, HAND_LIMIT, SHORT_NOTIONAL, lengthRounds,
   };
