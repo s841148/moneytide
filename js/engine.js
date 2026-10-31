@@ -216,9 +216,11 @@ window.MT = window.MT || {};
   function strategyPool(state) {
     const lv = M.LEVELS[state.config.difficulty];
     const ids = [];
+    const solo = state.players.length < 2;
     D.strategy.forEach((c) => {
       if (M.LEVELS[c.level] > lv) return;
       if (c.mode && c.mode !== state.config.victory) return;
+      if (solo && (c.kind === 'attack' || c.id === 'legal')) return; // 單人遊戲沒有對手可以攻擊
       for (let i = 0; i < c.count; i++) ids.push(c.id);
     });
     return ids;

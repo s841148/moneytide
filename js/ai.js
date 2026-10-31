@@ -189,7 +189,7 @@ window.MT = window.MT || {};
       if (style === 'momentum' && last < -0.06) reason = tx(nameOf(id).zh + ' 上季跌 ' + pct(last) + '，停損出場！', nameOf(id).en + ' fell ' + pct(last) + ' — cut the loss!');
       if (style === 'value' && value > cost * 1.6) reason = tx(nameOf(id).zh + ' 已經賺了 ' + pct(value / cost - 1) + '，獲利了結', nameOf(id).en + ' is up ' + pct(value / cost - 1) + ' — take profits');
       if (style === 'speculator' && (value > cost * 1.4 || value < cost * 0.7)) reason = tx(nameOf(id).zh + ' 漲跌夠大了，換下一個題材', nameOf(id).en + ' has moved enough — next hot story');
-      if (style === 'macro' && id !== 'TD' && PHASE_PICKS[s.macro.phase].indexOf(id) < 0) {
+      if (style === 'macro' && id !== 'TD' && M.byId[id].type !== 'fx' && PHASE_PICKS[s.macro.phase].indexOf(id) < 0) {
         reason = tx('現在是' + D.phases[s.macro.phase].name.zh + '期，' + nameOf(id).zh + ' 不適合了，換掉', 'In ' + D.phases[s.macro.phase].name.en + ', ' + nameOf(id).en + ' no longer fits — rotate out');
       }
       if (reason) {
@@ -236,11 +236,14 @@ window.MT = window.MT || {};
     if (!m.fails.DCA_SET && (style === 'conservative' || style === 'value') && !(p.dca || []).length && C.cashflow(s, p) > 10000) {
       return act({ type: 'DCA_SET', id: style === 'conservative' ? 'HDIV' : 'TW50', monthly: 5000 }, tx('每月定期定額 5,000，不用猜時機', 'Invest 5,000 a month automatically — no market timing'));
     }
-    // 穩健阿姨想要有自己的家：頭期款存夠、買了現金流還是正的
-    if (!m.fails.BUY_HOME && style === 'conservative' && !(p.home > 0)) {
-      const q = E.homeQuote(s, p, 'small');
+    // 想要有自己的家：穩健阿姨買套房、價值老爹買三房（頭期款存夠、買了現金流還是正的）
+    const homeKind = style === 'conservative' ? 'small' : style === 'value' ? 'family' : null;
+    if (!m.fails.BUY_HOME && homeKind && !(p.home > 0)) {
+      const q = E.homeQuote(s, p, homeKind);
       if (p.cash > (q.down + q.closing) * 1.5 && C.cashflow(s, p) + q.change > C.expenses(p) * 0.15) {
-        return act({ type: 'BUY_HOME', kind: 'small' }, tx('頭期款存夠了，買間小房子自住', 'Down payment saved — buying a small home'));
+        return act({ type: 'BUY_HOME', kind: homeKind }, homeKind === 'small'
+          ? tx('頭期款存夠了，買間小房子自住', 'Down payment saved — buying a small home')
+          : tx('頭期款存夠了，買間三房給家人住', 'Down payment saved — buying a family flat'));
       }
     }
     if (!m.fails.PENSION_SELF && !p.retired && !p.pension.self && (style === 'conservative' || style === 'value' || style === 'macro') && C.cashflow(s, p) > p.salary * 0.1) {
@@ -265,6 +268,84 @@ window.MT = window.MT || {};
       if (!info || m.fails.UPGRADE || !bold || phase === 'recession') continue;
       if (p.cash >= info.cost + C.expenses(p) * st.reserve) {
         return act({ type: 'UPGRADE', id: a.id }, tx('擴張成「' + info.name.zh + '」，成功率 ' + Math.round(info.chance * 100) + '%', 'Expand to "' + info.name.en + '" — ' + Math.round(info.chance * 100) + '% chance'));
+      }
+    }
+    return null;
+  }
+
+  // 房價過熱時獲利了結：衝衝哥、狐狸、價值老爹把漲多的房子開高一點賣掉
+  function flipLogic(s, p, m) {
+    if (m.fails.SELL_ASSET || s.macro.phase !== 'overheat') return null;
+    if (['momentum', 'speculator', 'value'].indexOf(p.ai.style) < 0) return null;
+    const turnKey = s.round + '-' + s.current;
+    const a = p.assets.find((x) => x.kind === 'realestate' && E.assetValue(x) >= x.cost * 1.25 && x.listed !== turnKey);
+    if (!a) return null;
+    const price = Math.round(E.assetValue(a) * 1.05 / 10000) * 10000;
+    if (E.saleQuote(a, price, s.round).net <= 0) return null;
+    return act({ type: 'SELL_ASSET', id: a.id, price },
+      tx('房市過熱，「' + a.name.zh + '」漲了 ' + pct(E.assetValue(a) / a.cost - 1) + '，開價 ' + fmt(price) + ' 獲利了結', 'The property market is overheating — "' + a.name.en + '" is up ' + pct(E.assetValue(a) / a.cost - 1) + '; listing at ' + fmt(price) + ' to take profit'));
+  }
+
+  // 向其他玩家提議買下他們有現金流的房子（每位電腦玩家至少隔 4 輪才提一次）
+  const offerMemo = {};
+  function offerLogic(s, p, m) {
+    if (m.fails.OFFER || ['speculator', 'momentum', 'value'].indexOf(p.ai.style) < 0) return null;
+    const last = offerMemo[s.config.seed + p.id];
+    if (last != null && s.round - last < 4 && s.round >= last) return null;
+    for (const o of opponents(s, p)) {
+      const a = o.assets.find((x) => x.kind === 'realestate' && x.cashflow > 0 && !x.underwater);
+      if (!a) continue;
+      const price = Math.round(((E.assetValue(a) - a.mortgage) * 1.1) / 10000) * 10000;
+      if (price < 10000 || price > spare(p)) continue;
+      offerMemo[s.config.seed + p.id] = s.round;
+      return act({ type: 'OFFER', to: o.id, deal: { give: { cash: price, asset: null, card: null }, get: { cash: 0, asset: a.id, card: null } } },
+        tx('想跟 ' + o.name + ' 買下「' + a.name.zh + '」，出價 ' + fmt(price) + '（比淨值多 1 成）', 'Offering ' + o.name + ' ' + fmt(price) + ' for "' + a.name.en + '" (10% over its equity)'));
+    }
+    return null;
+  }
+
+  // 價值老爹用限價單：到價停利、跌 1 成自動撿便宜
+  function orderLogic(s, p, m) {
+    if (m.fails.ORDER_PLACE || p.ai.style !== 'value' || (p.orders || []).length >= 2) return null;
+    const has = (id, side) => (p.orders || []).some((o) => o.id === id && o.side === side);
+    for (const id in p.holdings) {
+      const i = M.byId[id];
+      const units = Math.floor(p.holdings[id]);
+      if (!M.byShares(i) || units < 1 || has(id, 'sell')) continue;
+      const avg = (p.cost[id] || 0) / p.holdings[id] / M.fxOf(s, i);
+      const limit = Math.max(s.market.prices[id] * 1.1, avg * 1.3);
+      return act({ type: 'ORDER_PLACE', id, side: 'sell', units, limit },
+        tx('「' + i.name.zh + '」掛 ' + limit.toFixed(2) + ' 的限價賣單，到價自動停利', 'Limit sell on "' + i.name.en + '" at ' + limit.toFixed(2) + ' — take profit automatically'));
+    }
+    if (M.isTradable(s, 'TW50') && !has('TW50', 'buy')) {
+      const limit = s.market.prices.TW50 * 0.9;
+      const units = Math.floor((spare(p) * 0.3) / (limit * 1.01));
+      if (units >= 10) {
+        return act({ type: 'ORDER_PLACE', id: 'TW50', side: 'buy', units, limit },
+          tx('台灣 50 如果跌 1 成，自動買進 ' + units + ' 股（限價單）', 'If the Taiwan 50 drops 10%, buy ' + units + ' shares automatically (limit order)'));
+      }
+    }
+    return null;
+  }
+
+  // 宏觀先生的外幣配置：恐慌或衰退換日圓避險；美台利差大時存美元
+  function fxLogic(s, p, m) {
+    if (p.ai.style !== 'macro' || m.fails.TRADE || m.fxDone) return null;
+    m.fxDone = true;
+    const mac = s.macro;
+    const want = (mac.phase === 'recession' || mac.vix > 28) && M.isTradable(s, 'JPY') ? 'JPY'
+      : mac.usRate - mac.rate > 1.5 && M.isTradable(s, 'USD') ? 'USD' : null;
+    for (const id of ['USD', 'JPY', 'EUR', 'CNY']) {
+      if (p.holdings[id] && id !== want) {
+        return act({ type: 'TRADE', id, side: 'sell', amount: p.holdings[id] }, tx('情勢變了，把「' + nameOf(id).zh + '」換回台幣', 'Conditions changed — converting "' + nameOf(id).en + '" back to TWD'));
+      }
+    }
+    if (want && !p.holdings[want]) {
+      const amount = Math.floor(spare(p) * 0.2);
+      if (amount >= 50000) {
+        return act({ type: 'TRADE', id: want, side: 'buy', amount }, want === 'JPY'
+          ? tx('景氣差、市場恐慌，換一些日圓避險（' + fmt(amount) + '）', 'Weak economy and fear — moving ' + fmt(amount) + ' into yen as a safe haven')
+          : tx('美國利率比台灣高 ' + (mac.usRate - mac.rate).toFixed(1) + '%，存美元賺利差', 'US rates are ' + (mac.usRate - mac.rate).toFixed(1) + '% above Taiwan’s — holding dollars for the spread'));
       }
     }
     return null;
@@ -482,7 +563,11 @@ window.MT = window.MT || {};
       || (s.phase === 'action' && bizLogic(s, p, st, lv, m))
       || (s.phase === 'roll' && playCards(s, p, st, lv, m))
       || sellAssets(s, p, m)
+      || (s.phase === 'action' && flipLogic(s, p, m))
       || sellLogic(s, p, st, lv, m)
+      || (s.phase === 'action' && fxLogic(s, p, m))
+      || (s.phase === 'action' && orderLogic(s, p, m))
+      || (s.phase === 'action' && offerLogic(s, p, m))
       || (s.phase === 'action' && buyLogic(s, p, st, lv, m))
       || act({ type: s.phase === 'roll' ? 'ROLL' : 'END_TURN' });
   }
