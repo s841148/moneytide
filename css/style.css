@@ -395,10 +395,15 @@ i { font-style: normal; }
 }
 .modal-card {
   position: relative; background: var(--surface); border-radius: 18px; padding: 22px;
-  width: min(760px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 16px 48px rgba(0,0,0,.35);
+  width: min(760px, 100%); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto; box-shadow: 0 16px 48px rgba(0,0,0,.35);
 }
 .modal-card.small-modal { width: min(440px, 100%); }
-.modal-x { position: absolute; top: 10px; right: 12px; border: 0; background: none; font-size: 18px; color: var(--muted); }
+/* 關閉鈕黏在視窗右上角：內容很長往下捲時也一直看得到 */
+.modal-x {
+  position: sticky; top: 0; float: right; z-index: 3; margin: -12px -12px 0 8px;
+  width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 6px rgba(0,0,0,.18);
+  font-size: 18px; color: var(--muted); cursor: pointer;
+}
 .lead { font-size: 17px; font-weight: 700; }
 
 .g-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding-right: 24px; }
@@ -697,3 +702,9 @@ i { font-style: normal; }
 .sv-slot-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 180px; }
 .sv-slot-info small { font-size: 12px; }
 .sv-slot-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* 手機：視窗開著時，提示訊息退到後面，不要蓋住視窗裡的按鈕 */
+@media (max-width: 560px) {
+  body:has(#modal:not([hidden])) #toasts { z-index: 45; }
+  .modal-card { padding: 18px 16px; }
+}
