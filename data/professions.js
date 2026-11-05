@@ -11,7 +11,7 @@ MT.DATA.professions = [
     name: { zh: '工廠作業員', en: 'Factory Worker' },
     salary: 32000, living: 21000, tax: 1000, cash: 30000, home: 0,
     liabilities: [{ name: { zh: '機車貸款', en: 'Scooter loan' }, balance: 30000, payment: 3000 }],
-    skill: { name: { zh: '刻苦耐勞', en: 'Frugal' }, desc: { zh: '意外支出卡金額 −30%', en: 'Doodad costs −30%' } },
+    skill: { name: { zh: '刻苦耐勞', en: 'Frugal' }, desc: { zh: '意外支出卡金額 −30%', en: 'Unexpected expenses −30%' } },
   },
   {
     id: 'civil', icon: '🏛️',
@@ -39,7 +39,7 @@ MT.DATA.professions = [
     name: { zh: '業務員', en: 'Salesperson' },
     salary: 40000, living: 27000, tax: 2000, cash: 40000, home: 0,
     liabilities: [{ name: { zh: '汽車貸款', en: 'Car loan' }, balance: 500000, payment: 6000 }],
-    skill: { name: { zh: '人脈廣', en: 'Networker' }, desc: { zh: '小型機會抽 2 選 1', en: 'Draw 2 small deals, keep 1' } },
+    skill: { name: { zh: '人脈廣', en: 'Networker' }, desc: { zh: '小型機會抽 2 選 1', en: 'Draw 2 small opportunities, keep 1' } },
   },
   {
     id: 'engineer', icon: '💻',

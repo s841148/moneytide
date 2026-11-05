@@ -1,5 +1,5 @@
 // 錢潮 MoneyTide © 2026 麥麥的遊戲工廠 保留所有權利 All rights reserved. 詳見 LICENSE
-// 內圈「老鼠賽跑」棋盤：24 格，第 0 格是起點（發薪日）。
+// 棋盤：24 格環形，第 0 格是起點（發薪日）。
 // 說明文字中的 [[名詞id]] 會變成可點擊的名詞解釋。
 window.MT = window.MT || {};
 MT.DATA = MT.DATA || {};
@@ -12,12 +12,12 @@ MT.DATA.tileTypes = {
   },
   small: {
     icon: '🏠', color: 'green',
-    name: { zh: '小型機會', en: 'Small Deal' },
+    name: { zh: '小型機會', en: 'Small Opportunity' },
     desc: { zh: '抽一張小型投資機會：小套房、小生意。買下會產生[[passive_income]]的[[asset]]，是脫離[[rat_race]]的關鍵。', en: 'Draw a small investment: a studio flat or small business. Buying an [[asset]] that produces [[passive_income]] is how you escape the [[rat_race]].' },
   },
   big: {
     icon: '🏢', color: 'teal',
-    name: { zh: '大型機會', en: 'Big Deal' },
+    name: { zh: '大型機會', en: 'Big Opportunity' },
     desc: { zh: '抽一張大型投資機會，金額大、現金流也大，通常需要[[down_payment]]與[[mortgage]]。', en: 'Draw a big investment with large cashflow. Usually needs a [[down_payment]] and a [[mortgage]].' },
   },
   market: {
@@ -37,7 +37,7 @@ MT.DATA.tileTypes = {
   },
   doodad: {
     icon: '💸', color: 'orange',
-    name: { zh: '意外支出', en: 'Doodad' },
+    name: { zh: '意外支出', en: 'Unexpected Expense' },
     desc: { zh: '生活中的花費和誘惑。可以一次付清，有些可以[[installment]]——但分期會增加每月支出。', en: 'Life’s expenses and temptations. Pay now or use [[installment|installments]] — which raise monthly expenses.' },
   },
   learning: {
@@ -48,7 +48,7 @@ MT.DATA.tileTypes = {
   auction: {
     icon: '🔨', color: 'brown',
     name: { zh: '拍賣所', en: 'Auction' },
-    desc: { zh: '翻開一張大型機會，所有玩家公開競標。小心出價太高的「贏家詛咒」！', en: 'A big deal goes up for auction among all players. Beware the winner’s curse!' },
+    desc: { zh: '翻開一張大型機會，所有玩家公開競標。小心出價太高的「贏家詛咒」！', en: 'A big opportunity goes up for auction among all players. Beware the winner’s curse!' },
   },
   exchange: {
     icon: '🤝', color: 'cyan',

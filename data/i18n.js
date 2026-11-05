@@ -43,7 +43,7 @@ MT.t = function (key, params) {
 MT.STR = {
   zh: {
     title: '錢潮 MoneyTide',
-    subtitle: '從老鼠賽跑到財務自由的金融冒險',
+    subtitle: '從月光族到財務自由的金融冒險',
     copyright: '© 2026 麥麥的遊戲工廠　保留所有權利',
     legal_note: '未經同意請勿重製、轉載或商業使用。遊戲中的公司與部分事件為虛構，內容僅供教育，不構成投資建議。',
     setup_players: '玩家人數',
@@ -147,7 +147,7 @@ MT.STR = {
     play_again: '再玩一局',
     lesson_title: '💡 本局觀念回顧',
     lesson_1: '真正讓你財務自由的不是高薪，而是「被動收入」超過「支出」。',
-    lesson_2: '分期付款和信用貸款會增加每月支出，讓你更難脫離老鼠賽跑。',
+    lesson_2: '分期付款和信用貸款會增加每月支出，讓你更難跳下薪水跑步機。',
     lesson_3: '借錢投資（槓桿）能加速成長，但如果現金流變負，風險就很高。',
     // 名詞
     glossary: '📘 名詞圖鑑',
@@ -784,7 +784,7 @@ MT.STR = {
   },
   en: {
     title: 'MoneyTide',
-    subtitle: 'A financial adventure from the Rat Race to Financial Freedom',
+    subtitle: 'A financial adventure from living paycheck to paycheck to financial freedom',
     copyright: '© 2026 麥麥的遊戲工廠 (Maimai\'s Game Factory). All rights reserved.',
     legal_note: 'No copying, re-hosting or commercial use without permission. Companies and some events are fictional. For education only — not investment advice.',
     setup_players: 'Players',
@@ -885,7 +885,7 @@ MT.STR = {
     play_again: 'Play again',
     lesson_title: '💡 Key ideas from this game',
     lesson_1: 'High pay is not what sets you free — passive income exceeding expenses is.',
-    lesson_2: 'Installments and personal loans raise monthly expenses and keep you in the Rat Race.',
+    lesson_2: 'Installments and personal loans raise monthly expenses and keep you on the paycheck treadmill.',
     lesson_3: 'Borrowing to invest (leverage) speeds growth, but it is risky once cashflow turns negative.',
     glossary: '📘 Glossary',
     glossary_progress: '{n} / {total} unlocked',

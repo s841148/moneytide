@@ -1,6 +1,6 @@
 # 🌊 錢潮 MoneyTide
 
-一款教金融觀念的桌遊式網頁遊戲：從「老鼠賽跑」走向財務自由。
+一款教金融觀念的桌遊式網頁遊戲：從月光族走向財務自由。
 A board-and-card web game that teaches personal finance, macroeconomics and investing.
 
 ## 怎麼玩 / How to play
