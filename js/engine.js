@@ -66,6 +66,41 @@ window.MT = window.MT || {};
   const GOAL_FREEDOM_BONUS = 0.1; // 財務自由模式：進度加 10 個百分點
   const GOALS = ['home', 'debtfree', 'passive', 'nest', 'emergency', 'boss', 'fire'];
 
+  // ── M10：融券（放空）與衍生性商品 ──
+  const SHORT_COLLATERAL = 0.9; // 融券保證金：股價的 9 成
+  const SHORT_FEE = 0.0008; // 借券費
+  const SHORT_MAINT = 1.3; // 擔保維持率低於 130% 就被強制回補
+  // 權證（進階以上）：個股認購／認售，發行商用較高的價格賣給你、較低的價格買回（價差）
+  // 選擇權（專家）：台指選擇權（以台灣 50 為標的），買賣接近理論價格
+  const DERIVS = {
+    warrant: { level: 1, mult: 100, buy: 1.12, sell: 0.92, fee: 0, strikes: { call: [1, 1.1], put: [1, 0.9] }, quarters: [2, 4] },
+    option: { level: 2, mult: 1000, buy: 1.0, sell: 0.97, fee: 50, strikes: { call: [0.95, 1, 1.05], put: [0.95, 1, 1.05] }, quarters: [1, 2] },
+  };
+  function derivUnders(state, cat) {
+    if (cat === 'option') return M.isTradable(state, 'TW50') ? ['TW50'] : [];
+    return D.instruments.filter((i) => i.type === 'stock' && i.ccy === 'TWD' && M.isTradable(state, i.id)).map((i) => i.id);
+  }
+  function strikeTick(S) { return S >= 500 ? 10 : S >= 100 ? 5 : S >= 10 ? 0.5 : 0.1; }
+  // 某一檔標的可以買的契約清單（到期：第 expiry 輪結算時）
+  function derivMenu(state, cat, under) {
+    const d = DERIVS[cat];
+    const S = state.market.prices[under];
+    const tick = strikeTick(S);
+    const out = [];
+    ['call', 'put'].forEach((kind) => d.strikes[kind].forEach((k) => d.quarters.forEach((q) => {
+      const strike = Math.round((S * k) / tick) * tick;
+      const fair = M.optionPrice(state, under, kind, strike, q);
+      out.push({ kind, strike, expiry: state.round + q - 1, quarters: q, price: Math.round(fair * d.mult * d.buy + d.fee) });
+    })));
+    return out;
+  }
+  function derivLeft(state, x) { return x.expiry - state.round + 1; }
+  // 部位現在可以賣回的價格（每口／每張）
+  function derivBid(state, x) {
+    const d = DERIVS[x.cat];
+    return Math.max(0, Math.round(M.optionPrice(state, x.under, x.kind, x.strike, derivLeft(state, x)) * d.mult * d.sell - d.fee));
+  }
+
   function money(n) { return { money: n }; }
 
   function log(state, key, params) {
@@ -97,6 +132,12 @@ window.MT = window.MT || {};
     expenses(p) { return Math.round(p.living) + p.tax + Calc.childCost(p) + Calc.debtPayments(p) + Calc.loanPayment(p) + Calc.marginInterest(p) + Calc.premium(p) + Calc.selfPension(p); },
     income(s, p) { return Math.round(p.salary) + Calc.passive(s, p) + Calc.pensionIncome(p); },
     cashflow(s, p) { return Calc.income(s, p) - Calc.expenses(p); },
+    // 融券部位的淨值：保證金 + 賣出所得 − 買回需要的錢
+    shortValue(s, p) {
+      const sh = p.shorts || {};
+      return Object.keys(sh).reduce((sum, id) => sum + sh[id].collateral + sh[id].proceeds - sh[id].units * M.priceTWD(s, id), 0);
+    },
+    derivValue(s, p) { return (p.derivs || []).reduce((sum, x) => sum + derivBid(s, x) * x.lots, 0); },
     // 詐騙的「配息」不算真正的被動收入，不能拿來判定財務自由
     realPassive(s, p) { return Calc.passive(s, p) - Calc.scamIncome(p); },
     freedom(s, p) {
@@ -104,7 +145,8 @@ window.MT = window.MT || {};
       return e <= 0 ? 1 : Calc.realPassive(s, p) / e;
     },
     netWorth(s, p) {
-      const assets = p.cash + p.home + p.assets.reduce((sum, a) => sum + assetValue(a), 0) + M.holdingValue(s, p) + (p.pension ? p.pension.acct : 0);
+      const assets = p.cash + p.home + p.assets.reduce((sum, a) => sum + assetValue(a), 0) + M.holdingValue(s, p) + (p.pension ? p.pension.acct : 0)
+        + Calc.shortValue(s, p) + Calc.derivValue(s, p);
       const debts = p.bankLoan + Calc.marginLoan(p)
         + p.liabilities.filter((l) => l.lender == null).reduce((sum, l) => sum + l.balance, 0)
         + p.liabilities.filter((l) => l.lender != null).reduce((sum, l) => sum + l.principal, 0)
@@ -540,6 +582,13 @@ window.MT = window.MT || {};
       payCash(state, p, -amount);
     }
     runDca(state, p);
+    // 融券期間，股票發的股利要由放空的人付給借券給你的人
+    Object.keys(p.shorts || {}).forEach((id) => {
+      const div = Math.round(p.shorts[id].units * M.priceTWD(state, id) * M.yieldOf(state, M.byId[id]) / 12 * PAYDAY_MONTHS);
+      if (div <= 0) return;
+      payCash(state, p, div);
+      log(state, 'log_short_div', { name: p.name, inst: M.byId[id].name, amount: money(div) });
+    });
     // 負債依每月還款金額減少；玩家之間的借款，本金還給債權人
     p.liabilities = p.liabilities.filter((l) => {
       l.balance -= l.payment * PAYDAY_MONTHS;
@@ -1209,6 +1258,25 @@ window.MT = window.MT || {};
     });
   }
 
+  // 權證、選擇權到期：依結算價格自動履約（價內才有錢）
+  function settleDerivs(state, events) {
+    state.players.forEach((p) => {
+      if (!p.derivs || !p.derivs.length) return;
+      p.derivs = p.derivs.filter((x) => {
+        if (x.expiry > state.round) return true;
+        const S = state.market.prices[x.under];
+        const per = x.kind === 'call' ? Math.max(0, S - x.strike) : Math.max(0, x.strike - S);
+        const pay = Math.round(per * DERIVS[x.cat].mult * x.lots);
+        p.cash += pay;
+        const name = M.byId[x.under].name;
+        stat(p).realized.push({ name, gain: pay - x.cost, round: state.round });
+        log(state, pay > 0 ? 'log_deriv_pay' : 'log_deriv_zero', { name: p.name, inst: name, kind: { key: 'dk_' + x.cat + '_' + x.kind }, amount: money(pay), cost: money(x.cost) });
+        events.push({ id: p.id, key: pay > 0 ? 'ev_deriv_pay' : 'ev_deriv_zero', params: { inst: name, kind: { key: 'dk_' + x.cat + '_' + x.kind }, amount: money(pay) } });
+        return false;
+      });
+    });
+  }
+
   // 限價單：季結算後的價格碰到掛單價就成交；過期就取消
   function fillOrders(state, events) {
     state.players.forEach((p) => {
@@ -1240,6 +1308,28 @@ window.MT = window.MT || {};
     });
   }
 
+  // 融券回補：買回股票還給借券人，保證金與當初賣出的錢退回
+  function coverShort(state, p, id, units) {
+    const sh = p.shorts[id];
+    const n = Math.min(units, sh.units);
+    const i = M.byId[id];
+    const cost = M.buyCost(state, id, n);
+    const impact = (n * state.market.prices[id] * M.fxOf(state, i)) / i.liquidity;
+    state.market.prices[id] *= 1 + impact;
+    state.market.pressure[id] = (state.market.pressure[id] || 0) + impact;
+    const part = n / sh.units;
+    const release = (sh.collateral + sh.proceeds) * part;
+    const gain = Math.round(sh.proceeds * part - cost);
+    sh.collateral -= sh.collateral * part;
+    sh.proceeds -= sh.proceeds * part;
+    sh.units -= n;
+    if (sh.units <= 0) delete p.shorts[id];
+    p.cash += Math.round(release - cost);
+    stat(p).realized.push({ name: i.name, gain, round: state.round, short: true });
+    if (p.cash < 0) { const debt = -p.cash; p.cash = 0; payCash(state, p, debt); }
+    return { units: n, cost, gain };
+  }
+
   // 融資維持率檢查：市值低於融資借款的 130% 就強制賣出（斷頭）
   // 季中發生的斷頭先記在 roundEvents，季報再一起列出
   function marginCheck(state, events) {
@@ -1249,6 +1339,14 @@ window.MT = window.MT || {};
     }
     state.players.forEach((p) => {
       if (p.bankrupt) return;
+      // 融券：股價漲太多，擔保維持率跌破 130% → 強制回補（軋空）
+      Object.keys(p.shorts || {}).forEach((id) => {
+        const sh = p.shorts[id];
+        if ((sh.collateral + sh.proceeds) / (sh.units * M.priceTWD(state, id)) >= SHORT_MAINT) return;
+        const r = coverShort(state, p, id, sh.units);
+        log(state, 'log_short_call', { name: p.name, inst: M.byId[id].name, amount: money(-r.gain) });
+        events.push({ id: p.id, key: 'ev_short_call', params: { inst: M.byId[id].name, amount: money(-r.gain) } });
+      });
       Object.keys(p.margin).forEach((id) => {
         if (!p.holdings[id] || M.isFrozen(state, id)) return;
         const loan = p.margin[id];
@@ -1292,6 +1390,7 @@ window.MT = window.MT || {};
     const events = state.roundEvents || [];
     state.roundEvents = [];
     updateEconomy(state, events);
+    settleDerivs(state, events);
     fillOrders(state, events);
     marginCheck(state, events);
     // 破產淘汰制：資不抵債（淨資產比起點再少 6 個月以上的薪資）也算破產
@@ -1448,6 +1547,67 @@ window.MT = window.MT || {};
         if (action.side === 'buy') log(state, 'log_buy_mk', { name: p.name, inst: def.name, amount: money(r.amount) });
         else log(state, 'log_sell_mk', { name: p.name, inst: def.name, amount: money(r.proceeds - repay), gain: money(r.gain) });
         checkFreedom(state, p);
+        break;
+      }
+      case 'SHORT': {
+        // 融券（專家）：借股票來賣，股價下跌時再買回賺差價
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const i = M.byId[action.id];
+        if (M.LEVELS[state.config.difficulty] < 2 || !i || !M.byShares(i) || i.ccy !== 'TWD' || !M.isTradable(state, i.id)) return { ok: false, error: 'no_short' };
+        const units = Math.floor(Number(action.units) || 0);
+        if (!(units > 0)) return { ok: false, error: 'bad_amount' };
+        const p0 = state.market.prices[i.id];
+        const collateral = Math.round(units * p0 * SHORT_COLLATERAL);
+        if (p.cash < collateral) return { ok: false, error: 'not_enough_cash' };
+        const impact = (units * p0) / i.liquidity;
+        const gross = units * p0 * (1 - impact / 2);
+        const fee = Math.round(gross * (M.costs(i).sell + SHORT_FEE));
+        state.market.prices[i.id] = p0 * (1 - impact);
+        state.market.pressure[i.id] = (state.market.pressure[i.id] || 0) - impact;
+        p.cash -= collateral;
+        if (!p.shorts) p.shorts = {};
+        const sh = p.shorts[i.id] || (p.shorts[i.id] = { units: 0, proceeds: 0, collateral: 0 });
+        sh.units += units;
+        sh.proceeds += Math.round(gross - fee);
+        sh.collateral += collateral;
+        stat(p).fees += fee;
+        log(state, 'log_short', { name: p.name, inst: i.name, units, amount: money(Math.round(gross)) });
+        break;
+      }
+      case 'COVER': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const sh = (p.shorts || {})[action.id];
+        if (!sh) return { ok: false, error: 'bad_target' };
+        const n = Math.floor(Number(action.units) || sh.units);
+        if (!(n > 0)) return { ok: false, error: 'bad_amount' };
+        const r = coverShort(state, p, action.id, n);
+        log(state, 'log_cover', { name: p.name, inst: M.byId[action.id].name, units: r.units, gain: money(r.gain) });
+        break;
+      }
+      case 'DERIV_BUY': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const d = DERIVS[action.cat];
+        if (!d || M.LEVELS[state.config.difficulty] < d.level || derivUnders(state, action.cat).indexOf(action.under) < 0) return { ok: false, error: 'no_deriv' };
+        const item = derivMenu(state, action.cat, action.under).find((x) => x.kind === action.kind && x.strike === action.strike && x.expiry === action.expiry);
+        const lots = Math.floor(Number(action.lots) || 0);
+        if (!item || !(lots > 0) || lots > 100) return { ok: false, error: 'bad_amount' };
+        const cost = item.price * lots;
+        if (p.cash < cost) return { ok: false, error: 'not_enough_cash' };
+        p.cash -= cost;
+        if (!p.derivs) p.derivs = [];
+        p.derivs.push({ did: newId(state), cat: action.cat, under: action.under, kind: action.kind, strike: item.strike, expiry: item.expiry, lots, cost });
+        log(state, 'log_deriv_buy', { name: p.name, inst: M.byId[action.under].name, kind: { key: 'dk_' + action.cat + '_' + action.kind }, strike: item.strike, lots, amount: money(cost) });
+        break;
+      }
+      case 'DERIV_SELL': {
+        if (FREE_PHASES.indexOf(state.phase) < 0) return { ok: false, error: 'cant_trade' };
+        const x = (p.derivs || []).find((y) => y.did === action.did);
+        if (!x) return { ok: false, error: 'bad_target' };
+        const got = derivBid(state, x) * x.lots;
+        p.cash += got;
+        p.derivs = p.derivs.filter((y) => y !== x);
+        stat(p).realized.push({ name: M.byId[x.under].name, gain: got - x.cost, round: state.round });
+        log(state, 'log_deriv_sell', { name: p.name, inst: M.byId[x.under].name, kind: { key: 'dk_' + x.cat + '_' + x.kind }, amount: money(got), gain: money(got - x.cost) });
         break;
       }
       case 'DCA_SET': {
@@ -1745,6 +1905,7 @@ window.MT = window.MT || {};
     createGame, dispatch, getCard, roundInfo, doodadCost, peek, minBid, loanPayment, checkOffer, assetValue, takeoverPrice,
     saleChance, saleQuote, SALE_FEE, upgradeInfo, ipoQuote, taxBreakdown, landTaxRate, migrate,
     earliestRetire, earliestOf, pensionQuote, retireRoundOf,
+    derivMenu, derivBid, derivLeft, derivUnders, DERIVS, SHORT_COLLATERAL, SHORT_MAINT,
     homeQuote, homeSaleQuote, goalProgress, HOMES, DCA_MAX, ORDER_MAX, ORDER_ROUNDS, CARD_APR, GOAL_BONUS, GOAL_FREEDOM_BONUS,
     PREMIUM, PENSION_SELF, IPO_PE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,

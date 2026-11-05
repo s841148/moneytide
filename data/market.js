@@ -163,7 +163,7 @@ MT.DATA.cards.market = [
     effect: { shocks: { 'sector:tech': 0.08 } },
     tip: { zh: '同一個產業的公司常常一起漲跌，只買同產業並不算真正分散。', en: 'Stocks in one industry move together — owning only one sector isn’t real diversification.' } },
   { id: 'm_foreign_in', icon: '💹', name: { zh: '外資大舉匯入買台股', en: 'Foreign money floods into Taiwan stocks' },
-    effect: { shocks: { tw: 0.04 }, macro: { fx: -0.01 } },
+    effect: { shocks: { tw: 0.04, CHIP: 0.02 }, macro: { fx: -0.01, flow: 1.2 } },
     tip: { zh: '外資買台股要先換成台幣，所以台幣跟著[[appreciation|升值]]（[[p_supply]]）。', en: 'Foreigners must buy TWD to buy Taiwan stocks, so the TWD [[appreciation|appreciates]] ([[p_supply]]).' } },
   { id: 'm_bank_div', icon: '💰', name: { zh: '福滿金控宣布加碼配息', en: 'Fortune Financial raises its dividend' },
     effect: { shocks: { BANK: 0.06 } },

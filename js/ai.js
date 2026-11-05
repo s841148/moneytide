@@ -351,6 +351,48 @@ window.MT = window.MT || {};
     return null;
   }
 
+  // 衍生性商品與放空：專家級的衝衝哥會放空弱勢股；狐狸買權證／買權賭上漲；宏觀先生在過熱時買賣權避險
+  function derivLogic(s, p, m) {
+    if (m.derivDone) return null;
+    m.derivDone = true;
+    const lvl = M.LEVELS[s.config.difficulty];
+    const style = p.ai.style;
+    const shorts = p.shorts || {};
+    // 回補：賺 15% 或虧 15% 就出場
+    for (const id in shorts) {
+      const sh = shorts[id];
+      const pl = (sh.proceeds - sh.units * M.priceTWD(s, id)) / sh.proceeds;
+      if (!m.fails.COVER && (pl > 0.15 || pl < -0.15)) {
+        return act({ type: 'COVER', id, units: sh.units }, pl > 0
+          ? tx('「' + nameOf(id).zh + '」放空賺了 ' + pct(pl) + '，回補獲利', 'Short on "' + nameOf(id).en + '" is up ' + pct(pl) + ' — covering')
+          : tx('「' + nameOf(id).zh + '」不跌反漲，停損回補', '"' + nameOf(id).en + '" rose instead — cutting the short'));
+      }
+    }
+    if (lvl >= 2 && style === 'momentum' && !m.fails.SHORT && !Object.keys(shorts).length) {
+      const weak = M.available(s).filter((i) => i.type === 'stock' && i.ccy === 'TWD' && s.market.last[i.id] < -0.06)
+        .sort((a, b) => s.market.last[a.id] - s.market.last[b.id])[0];
+      if (weak) {
+        const units = Math.floor((spare(p) * 0.25) / (s.market.prices[weak.id] * E.SHORT_COLLATERAL));
+        if (units >= 10) return act({ type: 'SHORT', id: weak.id, units }, tx('「' + weak.name.zh + '」上季跌 ' + pct(s.market.last[weak.id]) + '，融券放空 ' + units + ' 股，賭它繼續跌', '"' + weak.name.en + '" fell ' + pct(s.market.last[weak.id]) + ' — shorting ' + units + ' shares, betting on more'));
+      }
+    }
+    if ((p.derivs || []).length || m.fails.DERIV_BUY) return null;
+    const buy = (cat, under, kind, why) => {
+      const menu = E.derivMenu(s, cat, under).filter((x) => x.kind === kind && x.quarters === E.DERIVS[cat].quarters[1]);
+      const item = menu[Math.floor(menu.length / 2)] || menu[0];
+      const lots = item && Math.floor((spare(p) * 0.08) / item.price);
+      return item && lots >= 1 ? act({ type: 'DERIV_BUY', cat, under, kind, strike: item.strike, expiry: item.expiry, lots: Math.min(lots, 20) }, why) : null;
+    };
+    if (style === 'speculator' && (s.macro.phase === 'recovery' || s.macro.phase === 'expansion')) {
+      if (lvl >= 2) return buy('option', 'TW50', 'call', tx('買台指買權，小錢賭大盤上漲（最多賠掉權利金）', 'Buying index calls — a small bet on a rally (max loss: the premium)'));
+      if (lvl >= 1 && M.isTradable(s, 'CHIP')) return buy('warrant', 'CHIP', 'call', tx('買晶圓之星認購權證，以小搏大', 'Buying WaferStar call warrants — big upside for a small stake'));
+    }
+    if (style === 'macro' && lvl >= 2 && (s.macro.phase === 'overheat' || s.macro.vix > 28) && M.holdingValue(s, p) > 1000000) {
+      return buy('option', 'TW50', 'put', tx('景氣過熱，買台指賣權幫股票保險（避險）', 'Overheating — buying index puts to insure my stocks (hedge)'));
+    }
+    return null;
+  }
+
   function buyTarget(s, p) {
     const style = p.ai.style;
     const avail = M.available(s);
@@ -566,6 +608,7 @@ window.MT = window.MT || {};
       || (s.phase === 'action' && flipLogic(s, p, m))
       || sellLogic(s, p, st, lv, m)
       || (s.phase === 'action' && fxLogic(s, p, m))
+      || (s.phase === 'action' && derivLogic(s, p, m))
       || (s.phase === 'action' && orderLogic(s, p, m))
       || (s.phase === 'action' && offerLogic(s, p, m))
       || (s.phase === 'action' && buyLogic(s, p, st, lv, m))

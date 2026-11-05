@@ -26,6 +26,14 @@ window.MT = window.MT || {};
     recession: { gdp: -1.5, cpi: 1, ret: -0.03, vix: 28, oil: -0.05 },
   };
   const REBOUND = 0.4; // 新聞事件造成的漲跌，下一季回補 40%（市場常常反應過度）
+  // ── 進階以上：外資流向與融資餘額 ──
+  // flow：外資買賣超（1 = 約 300 億台幣），正數 = 匯入買台股 → 台幣升值、權值股上漲
+  // marginLevel：市場融資餘額指數（1 = 正常），越高代表散戶借錢買股越多，大跌時斷頭賣壓越重
+  const FLOW_FX = 0.007; // 外資每 1 單位買超，台幣升值 0.7%
+  const FLOW_STOCK = 0.025; // 外資每 1 單位買超，台股（依 beta）上漲 2.5%
+  const HEAVY = { CHIP: 1.4, TW50: 1.2, BANK: 1.1, HDIV: 0.9 }; // 外資偏愛的權值股
+  const CASCADE_TRIGGER = { medium: -0.09, hard: -0.09 }; // 大盤（含外資影響）一季跌超過這個幅度，而且融資餘額偏高，就會引發斷頭潮
+  const CASCADE_SIZE = { medium: 0.05, hard: 0.05 }; // 斷頭潮的額外跌幅 = 這個數字 × (融資餘額指數 − 1)
 
   const byId = {};
   D.instruments.forEach((i) => { byId[i.id] = i; });
@@ -44,7 +52,7 @@ window.MT = window.MT || {};
   function snapshot(m) {
     return {
       phase: m.phase, gdp: m.gdp, cpi: m.cpi, rate: m.rate, usRate: m.usRate, unemp: m.unemp, fx: m.fx, oil: m.oil, vix: m.vix,
-      usdjpy: m.usdjpy, eurusd: m.eurusd, usdcny: m.usdcny,
+      usdjpy: m.usdjpy, eurusd: m.eurusd, usdcny: m.usdcny, flow: m.flow || 0, marginLevel: m.marginLevel || 1,
     };
   }
 
@@ -53,7 +61,7 @@ window.MT = window.MT || {};
   const FX_START = { usdjpy: 150, eurusd: 1.08, usdcny: 7.2, jpRate: 0.25, euRate: 2.5, cnRate: 1.5 };
 
   function init(state) {
-    state.macro = Object.assign({ phase: 'recovery', gdp: 2.0, cpi: 1.8, rate: 2.25, usRate: 3.75, unemp: 4.2, fx: 31.5, oil: 75, vix: 18, cbDoneRound: 0 }, FX_START);
+    state.macro = Object.assign({ phase: 'recovery', gdp: 2.0, cpi: 1.8, rate: 2.25, usRate: 3.75, unemp: 4.2, fx: 31.5, oil: 75, vix: 18, cbDoneRound: 0, flow: 0, marginLevel: 1 }, FX_START);
     const prices = {}, history = {}, last = {};
     D.instruments.forEach((i) => { prices[i.id] = i.price; history[i.id] = [i.price]; last[i.id] = 0; });
     state.market = { prices, history, last, contrib: {}, pressure: {}, intra: {}, roundRateMove: 0, macroHistory: [snapshot(state.macro)], reIndex: 1 };
@@ -253,6 +261,10 @@ window.MT = window.MT || {};
     if (x.cpi) m.cpi = clamp(m.cpi + x.cpi, -1, 10);
     if (x.gdp) m.gdp = clamp(m.gdp + x.gdp, -6, 8);
     if (x.usRate) m.usRate = r2(clamp(m.usRate + x.usRate, 0, 8));
+    if (x.flow && LEVELS[state.config.difficulty] >= 1) {
+      m.flow = clamp((m.flow || 0) + x.flow, -3, 3);
+      m.fx = clamp(m.fx * (1 - FLOW_FX * x.flow), 26, 36);
+    }
     moveCcy(m, x);
     // 制裁：凍結商品，期間無法賣出
     if (ef.freeze) {
@@ -341,9 +353,21 @@ window.MT = window.MT || {};
     m.usRate = r2(clamp(m.usRate + usMove, 0, 8));
     usMove = m.usRate - before.usRate;
 
-    // 4. 匯率：美台利差越大、市場越恐慌，美元越強
+    // 3b. 外資流向（進階以上）：美台利差越大、市場越恐慌就流出；台灣景氣好就流入
+    const lvl = LEVELS[state.config.difficulty];
+    if (lvl >= 1) {
+      // 以長期平均為中心，外資有進有出，不會讓台股長期只漲或只跌
+      const raw = -0.5 * (m.usRate - m.rate - 1.5) - 0.04 * (m.vix - T.vix) + 0.3 * (m.gdp - T.gdp);
+      // 跟「最近的常態」比較：條件變好才匯入、變差才匯出，長期下來外資有進有出
+      m.pullAvg = m.pullAvg == null ? raw : 0.85 * m.pullAvg + 0.15 * raw;
+      m.flow = clamp(0.4 * (m.flow || 0) + 0.6 * (raw - m.pullAvg) + gauss(state) * 0.6 * vm + (evm.flow || 0), -3, 3);
+    } else {
+      m.flow = 0;
+    }
+
+    // 4. 匯率：美台利差越大、市場越恐慌，美元越強；外資匯入時台幣升值
     const dFx = 0.004 * (m.usRate - m.rate - 1.25) + 0.0015 * (m.vix - before.vix) - 0.06 * Math.log(m.fx / 31)
-      + gauss(state) * 0.01 * vm + (evm.fx || 0);
+      - FLOW_FX * m.flow + gauss(state) * 0.01 * vm + (evm.fx || 0);
     m.fx = clamp(m.fx * (1 + dFx), 26, 36);
 
     // 4b. 其他貨幣：日本利率很低且恐慌時日圓升值（避險），歐元跟著美歐利差，人民幣受央行管理、波動小
@@ -366,6 +390,12 @@ window.MT = window.MT || {};
     const mkt = T.ret + 0.006 * (m.gdp - 2.5) - 0.02 * dRate + gauss(state) * 0.035 * (m.vix / 18) * vm;
     if (!mk.lastShock) mk.lastShock = {};
     const nextShock = {};
+    // 融資斷頭潮（進階以上）：大盤加上外資的影響跌太多，而且融資餘額偏高 → 斷頭賣壓讓台股多跌一段
+    const playerMargin = state.players.reduce((s, p) => s + Object.keys(p.margin || {}).reduce((t, id) => t + p.margin[id], 0), 0);
+    const marginIdx = (m.marginLevel || 1) + playerMargin / 2e8;
+    const twMove = mkt + FLOW_STOCK * m.flow;
+    const cascade = lvl >= 1 && twMove < CASCADE_TRIGGER[state.config.difficulty] ? -CASCADE_SIZE[state.config.difficulty] * Math.max(0, marginIdx - 1) : 0;
+    mk.cascade = cascade;
 
     D.instruments.forEach((i) => {
       const intra = mk.intra[i.id] || {};
@@ -379,6 +409,8 @@ window.MT = window.MT || {};
           vix: (i.sens.vix * dVix) / 10,
           event: ev && ev.shocks ? shockFor(i, ev.shocks) : 0,
           rebound: -REBOUND * (mk.lastShock[i.id] || 0),
+          foreign: i.ccy === 'TWD' && i.type !== 'bond' ? FLOW_STOCK * m.flow * Math.max(0.3, i.beta) * (HEAVY[i.id] || 0.8) : 0,
+          margin: i.ccy === 'TWD' && (i.type === 'stock' || i.type === 'etf') ? cascade * Math.max(0.3, i.beta) : 0,
           trade: -0.4 * (mk.pressure[i.id] || 0),
           noise: i.vol * vm * gauss(state),
           fee: i.fee ? -i.fee / 4 : 0,
@@ -389,7 +421,7 @@ window.MT = window.MT || {};
         mk.prices[i.id] = Math.max(i.price * 0.02, mk.prices[i.id] * (1 + r));
       }
       // 記下本季的新聞衝擊，下一季部分回補
-      nextShock[i.id] = (c.event || 0) + (intra.news || 0) + (intra.geo || 0) + (intra.attack || 0);
+      nextShock[i.id] = (c.event || 0) + (intra.news || 0) + (intra.geo || 0) + (intra.attack || 0) + (c.margin || 0); // 斷頭潮殺過頭，下一季也會部分反彈
       // 合併本季中途發生的變化（市場消息、央行會議、玩家買賣）
       for (const k in intra) c[k] = (c[k] || 0) + intra[k];
       if (i.ccy !== 'TWD') c.fxTWD = ccyTWD(m, i.ccy) / ccyTWD(before, i.ccy) - 1; // 換回台幣時的匯率影響
@@ -399,6 +431,12 @@ window.MT = window.MT || {};
       if (h.length > 41) h.shift();
       mk.contrib[i.id] = c;
     });
+
+    // 融資餘額：台股漲就增加（散戶追高借錢），平時慢慢回到正常，斷頭潮之後大減
+    if (lvl >= 1) {
+      m.marginLevel = clamp((m.marginLevel || 1) * (1 + 1.5 * twMove) + 0.08 * (1 - (m.marginLevel || 1)), 0.4, 2.2);
+      if (cascade < 0) m.marginLevel = clamp(m.marginLevel * 0.7, 0.4, 2.2);
+    }
 
     // 房價指數：長期緩漲，升息與衰退時下跌（升息 1 個百分點約跌 4%）
     const RE_PHASE = { recovery: 0, expansion: 0.01, overheat: 0.005, recession: -0.025 };
@@ -550,7 +588,58 @@ window.MT = window.MT || {};
         steps: [tx(D.phases[a.phase].desc.zh, D.phases[a.phase].desc.en, 'p_cycle')],
       });
     }
+    if (LEVELS[state.config.difficulty] >= 1 && Math.abs(a.flow) >= 1.2) {
+      const yi = Math.round(a.flow * 300);
+      chains.push(a.flow > 0
+        ? { icon: '💹', title: tx('外資買超約 ' + yi + ' 億', 'Foreign investors bought about NT$' + yi + ' 100M net'), steps: [
+          tx('台灣景氣好、美台利差小、市場不恐慌 → 外資匯入', 'Strong Taiwan growth, a small US–Taiwan rate gap and calm markets → foreign money flows in', 'p_capital_flow'),
+          tx('外資要先把美元換成台幣 → 台幣升值', 'Foreigners must buy TWD first → the TWD strengthens', 'p_supply'),
+          tx('外資買的多是權值股（晶圓之星、台灣 50）→ 漲最多', 'They mostly buy heavyweights (WaferStar, Taiwan 50) → those rise most'),
+        ] }
+        : { icon: '💸', title: tx('外資賣超約 ' + (-yi) + ' 億', 'Foreign investors sold about NT$' + (-yi) + ' 100M net'), steps: [
+          tx('美國利率比台灣高、或市場恐慌 → 外資把錢匯回美國', 'Higher US rates or fear → foreigners take money home', 'p_capital_flow'),
+          tx('賣台股、換回美元 → 台幣貶值', 'They sell stocks and buy dollars → the TWD weakens', 'p_supply'),
+          tx('權值股跌最多；但出口商因台幣貶值受惠', 'Heavyweights fall most, though exporters gain from a weaker TWD', 'p_fx_trade'),
+        ] });
+    }
+    if (state.market.cascade < 0) {
+      chains.push({ icon: '🔨', title: tx('融資斷頭潮：台股多跌 ' + pct(state.market.cascade, 1), 'Margin-call cascade: Taiwan stocks fell an extra ' + pct(state.market.cascade, 1)), steps: [
+        tx('股市上漲時散戶大量借錢買股 → 融資餘額偏高', 'In the rally, retail investors borrowed heavily → margin balances ran high', 'p_leverage'),
+        tx('大盤一跌，維持率跌破 130% → 券商強制賣出（斷頭）', 'When the market fell, accounts dropped below 130% → brokers force-sold', 'p_leverage'),
+        tx('賣壓讓股價再跌 → 更多人被斷頭（多殺多）', 'The selling pushes prices lower → more margin calls (a cascade)'),
+      ] });
+    }
     return chains;
+  }
+
+  // ── 選擇權／權證：Black–Scholes 定價 ──
+  function ncdf(x) {
+    // 常態分配累積機率（Abramowitz–Stegun 近似）
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const d = 0.3989423 * Math.exp(-x * x / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return x > 0 ? 1 - p : p;
+  }
+  // 標的的年化波動度：大盤波動 × beta 加上個股波動，再看市場恐慌程度
+  function sigmaOf(state, i) {
+    const vm = VOL_MULT[state.config.difficulty];
+    return Math.max(0.08, 2.2 * Math.sqrt(Math.pow(i.beta * 0.045, 2) + i.vol * i.vol) * vm * Math.sqrt(Math.max(0.6, state.macro.vix / 18)));
+  }
+  // 每 1 股標的的理論價格；quarters = 剩幾季到期
+  function optionPrice(state, id, kind, strike, quarters) {
+    const i = byId[id];
+    const S = state.market.prices[id];
+    const T = Math.max(0, quarters) / 4;
+    const intrinsic = kind === 'call' ? Math.max(0, S - strike) : Math.max(0, strike - S);
+    if (T <= 0) return intrinsic;
+    const r = Math.max(0, state.macro.rate) / 100;
+    const sig = sigmaOf(state, i);
+    const d1 = (Math.log(S / strike) + (r + sig * sig / 2) * T) / (sig * Math.sqrt(T));
+    const d2 = d1 - sig * Math.sqrt(T);
+    const v = kind === 'call'
+      ? S * ncdf(d1) - strike * Math.exp(-r * T) * ncdf(d2)
+      : strike * Math.exp(-r * T) * ncdf(-d2) - S * ncdf(-d1);
+    return Math.max(intrinsic, v);
   }
 
   // 舊存檔：補上其他貨幣與新商品
@@ -568,7 +657,7 @@ window.MT = window.MT || {};
   }
 
   MT.Macro = {
-    migrate, ccyTWD, byShares, lotSize, buyCost, maxShares,
+    migrate, ccyTWD, byShares, lotSize, buyCost, maxShares, optionPrice, sigmaOf, VOL_MULT,
     init, settle, trade, applyNews, applyRate, cbDecide, cbTarget, isFrozen, rollPhase,
     available, isTradable, yieldOf, fxOf, priceTWD, holdingValue, incomeLines, dividendMonthly, costs,
     byId, LEVELS,

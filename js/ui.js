@@ -1055,6 +1055,8 @@ window.MT = window.MT || {};
         : '';
       html += row(esc(L(l.name)), fmt(-owed), 'neg', btn);
     });
+    if (Object.keys(p.shorts || {}).length) html += row(rich({ zh: '[[short_selling|融券部位]]淨值', en: '[[short_selling|Short positions]] (net)' }), fmt(C.shortValue(g, p)));
+    if ((p.derivs || []).length) html += row(rich({ zh: '[[option|權證／選擇權]]市值', en: '[[option|Warrants / options]] value' }), fmt(C.derivValue(g, p)));
     Object.keys(p.margin || {}).forEach((id) => {
       html += row(rich({ zh: '[[margin_trading|融資借款]]：', en: '[[margin_trading|Margin loan]]: ' }) + esc(L(M.byId[id].name)), fmt(-p.margin[id]), 'neg');
     });
@@ -1319,6 +1321,12 @@ window.MT = window.MT || {};
         html += '<div class="mcell"><span>' + t(key) + '</span><b>' + now.toFixed(d) + ' ' + arrow(now, M.ccyTWD(before, c)) + '</b>'
           + spark(hist.filter((x) => x.usdjpy).map((x) => M.ccyTWD(x, c)), 70, 18) + '</div>';
       });
+      // 外資買賣超（億）與融資餘額指數
+      const fl = Math.round((m.flow || 0) * 300);
+      html += '<div class="mcell"><span>' + rich(t('m_flow')) + '</span><b class="' + moneyCls(fl) + '">' + (fl > 0 ? '+' : '') + fl + t('m_yi') + '</b>'
+        + spark(hist.filter((x) => x.flow != null).map((x) => x.flow), 70, 18) + '</div>'
+        + '<div class="mcell"><span>' + rich(t('m_margin')) + '</span><b class="' + ((m.marginLevel || 1) > 1.4 ? 'neg' : '') + '">' + Math.round((m.marginLevel || 1) * 100) + '</b>'
+        + spark(hist.filter((x) => x.marginLevel != null).map((x) => x.marginLevel), 70, 18) + '</div>';
     }
     if (lv >= 2) {
       html += cell(rich({ zh: '[[vix|VIX 恐慌指數]]', en: '[[vix|VIX]]' }), m.vix.toFixed(0), 'vix')
@@ -1366,7 +1374,56 @@ window.MT = window.MT || {};
       });
     });
     if (M.LEVELS[g.config.difficulty] === 0) html += '<p class="muted small">' + t('mk_locked') + '</p>';
+    html += derivPanelHtml(g, p);
     return html;
+  }
+
+  // ── 衍生性商品（進階：權證；專家：台指選擇權）──
+  function derivPanelHtml(g, p) {
+    const lvl = M.LEVELS[g.config.difficulty];
+    if (lvl < 1) return '';
+    const can = canTrade(g) && g.players[g.current] === p && isMine(p);
+    let html = '<div class="st-sub">' + rich(t('dv_group')) + '</div>'
+      + '<div class="loan-btns"><button class="btn sm" data-action="deriv-open" data-cat="warrant">📜 ' + t('dv_warrant') + '</button>'
+      + (lvl >= 2 ? '<button class="btn sm" data-action="deriv-open" data-cat="option">📊 ' + t('dv_option') + '</button>' : '') + '</div>';
+    (p.derivs || []).forEach((x) => {
+      const bid = E.derivBid(g, x) * x.lots;
+      html += '<div class="srow"><span>' + esc(L(M.byId[x.under].name)) + ' ' + t('dk_' + x.cat + '_' + x.kind) + ' ' + x.strike + ' × ' + x.lots
+        + ' <small class="muted">' + t('dv_left', { n: E.derivLeft(g, x) }) + '</small></span><b class="' + moneyCls(bid - x.cost) + '">' + fmt(bid) + '</b>'
+        + (can ? '<button class="btn xs" data-action="deriv-sell" data-did="' + x.did + '">' + t('od_sell') + '</button>' : '') + '</div>';
+    });
+    Object.keys(p.shorts || {}).forEach((id) => {
+      const sh = p.shorts[id];
+      const pl = Math.round(sh.proceeds - sh.units * M.priceTWD(g, id));
+      html += '<div class="srow"><span>📉 ' + t('sh_short_pos', { inst: L(M.byId[id].name), n: sh.units.toLocaleString() }) + '</span><b class="' + moneyCls(pl) + '">' + fmt(pl) + '</b>'
+        + (can ? '<button class="btn xs" data-action="order" data-id="' + id + '">' + t('sh_cover') + '</button>' : '') + '</div>';
+    });
+    if (lvl < 2) html += '<p class="muted small">' + t('dv_locked') + '</p>';
+    return html;
+  }
+
+  UI.deriv = { cat: 'warrant', under: 'CHIP' };
+  function openDeriv(cat) {
+    const g = UI.game;
+    const p = g.players[g.current];
+    const unders = E.derivUnders(g, cat);
+    if (!unders.length) return;
+    if (UI.deriv.cat !== cat || unders.indexOf(UI.deriv.under) < 0) UI.deriv = { cat, under: unders[0] };
+    const under = UI.deriv.under;
+    const i = M.byId[under];
+    const d = E.DERIVS[cat];
+    const can = canTrade(g) && isMine(p);
+    const menu = E.derivMenu(g, cat, under);
+    const unit = t(cat === 'option' ? 'dv_unit_option' : 'dv_unit_warrant');
+    const rows = menu.map((x) => '<tr><td>' + t('dk_' + cat + '_' + x.kind) + '</td><td>' + x.strike + '</td><td title="' + esc(t('lim_until', { round: x.expiry })) + '">' + t('dv_expiry', { round: x.expiry, n: x.quarters }) + '</td><td><b>' + fmt(x.price) + '</b></td>'
+      + '<td>' + (can ? [1, 5].map((n) => '<button class="btn xs" data-action="deriv-buy" data-kind="' + x.kind + '" data-strike="' + x.strike + '" data-expiry="' + x.expiry + '" data-lots="' + n + '"' + (p.cash < x.price * n ? ' disabled' : '') + '>' + t('od_buy') + ' ' + n + '</button>').join(' ') : '') + '</td></tr>').join('');
+    UI.modal('<h2>' + (cat === 'option' ? '📊 ' : '📜 ') + t(cat === 'option' ? 'dv_option' : 'dv_warrant') + '</h2>'
+      + (unders.length > 1 ? '<div class="chips">' + unders.map((u) => '<button class="chip' + (u === under ? ' on' : '') + '" data-action="deriv-under" data-under="' + u + '">' + M.byId[u].icon + ' ' + esc(L(M.byId[u].name)) + '</button>').join('') + '</div>' : '')
+      + '<p>' + t('dv_under', { inst: L(i.name), price: g.market.prices[under].toFixed(2), vol: Math.round(M.sigmaOf(g, i) * 100) }) + '</p>'
+      + '<div class="table-wrap"><table class="rank dv-table"><thead><tr><th>' + t('dv_kind') + '</th><th>' + rich(t('dv_strike')) + '</th><th>' + t('dv_exp') + '</th><th>' + t('dv_price', { unit }) + '</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      + '<p class="small">' + rich(t(cat === 'option' ? 'dv_option_note' : 'dv_warrant_note', { mult: d.mult, spread: Math.round((d.buy - d.sell) * 100) })) + '</p>'
+      + '<p class="small muted">' + rich(t('dv_common_note')) + '</p>', 'order-modal');
+    MT.Gloss.flushUnlocks();
   }
 
   // ── 下單視窗 ──
@@ -1500,8 +1557,30 @@ window.MT = window.MT || {};
           + [10000, 50000, 100000].map((a) => '<button class="btn sm warn" data-action="trade" data-side="margin" data-amount="' + a + '"' + (p.cash < a ? ' disabled' : '') + '>' + fmt(a) + '</button>').join('') + '</div>'
           + '<p class="small muted">' + rich(t('od_margin_note', { own: { money: 100000 }, loan: { money: 100000 * (E.MARGIN_LEVERAGE - 1) }, total: { money: 100000 * E.MARGIN_LEVERAGE } })) + '</p>'
         : '')
+      + (!sellOnly ? shortHtml(g, p, i) : '')
       + '</div>';
     return html;
+  }
+
+  // 融券（專家）：台股可以借券放空
+  function shortHtml(g, p, i) {
+    if (M.LEVELS[g.config.difficulty] < 2 || i.ccy !== 'TWD') return '';
+    const id = i.id;
+    const price = M.priceTWD(g, id);
+    const sh = (p.shorts || {})[id];
+    const presets = [100, 1000, 5000];
+    let html = '<div class="od-btns"><b>📉 ' + rich(t('sh_short')) + '</b>'
+      + presets.map((n) => '<button class="btn sm warn" data-action="short" data-units="' + n + '"' + (p.cash < n * price * E.SHORT_COLLATERAL ? ' disabled' : '') + '>' + shareLabel(i, n)
+        + '<small>' + t('sh_collateral', { amount: { money: Math.round(n * price * E.SHORT_COLLATERAL) } }) + '</small></button>').join('') + '</div>';
+    if (sh) {
+      const pl = Math.round(sh.proceeds - sh.units * price);
+      const ratio = (sh.collateral + sh.proceeds) / (sh.units * price);
+      html += '<div class="note' + (ratio < 1.5 ? ' bad' : '') + '">' + t('sh_short_pos', { inst: L(i.name), n: sh.units.toLocaleString() })
+        + ' · ' + t('sh_avg', { price: (sh.proceeds / sh.units).toFixed(2) }) + ' · ' + t('sh_pl') + ' <b class="' + moneyCls(pl) + '">' + fmt(pl) + '</b>'
+        + ' · ' + rich(t('sh_ratio')) + ' <b>' + Math.round(ratio * 100) + '%</b>'
+        + ' <button class="btn xs" data-action="cover">' + t('sh_cover_all') + '</button></div>';
+    }
+    return html + '<p class="small muted">' + rich(t('sh_note', { col: Math.round(E.SHORT_COLLATERAL * 100), maint: Math.round(E.SHORT_MAINT * 100) })) + '</p>';
   }
   function updateShareCost() {
     const g = UI.game;
@@ -1781,7 +1860,7 @@ window.MT = window.MT || {};
     log_poach: 'zap', log_blocked: 'shield', log_insured: 'shield', log_hedge_pay: 'shield', log_auction_bid: 'tick',
     log_asset_sold: 'sold', log_asset_unsold: 'wrong',
     log_scam_bust: 'alarm', log_scam_dodged: 'success', log_claim: 'shield', log_retire_all: 'chime', log_retire_early: 'fanfare', log_goal: 'fanfare', log_home_buy: 'sold', log_home_sell: 'cash',
-    log_dca: 'coin', log_order_fill: 'cash', log_card: 'loss', log_dca_on: 'stamp', log_order_place: 'stamp', log_ipo: 'fanfare',
+    log_dca: 'coin', log_order_fill: 'cash', log_short: 'zap', log_cover: 'cash', log_short_call: 'alarm', log_deriv_buy: 'card', log_deriv_pay: 'sold', log_deriv_zero: 'loss', log_deriv_sell: 'cash', log_card: 'loss', log_dca_on: 'stamp', log_order_place: 'stamp', log_ipo: 'fanfare',
     log_upgrade_ok: 'success', log_upgrade_fail: 'loss', log_upgrade_bust: 'alarm', log_insure_on: 'stamp', log_pension_on: 'stamp',
     log_debt_paid: 'happy', log_payoff: 'happy', log_loan: 'stamp', log_repay: 'stamp', log_settle: 'chime', log_trade_done: 'cash',
   };
@@ -1801,6 +1880,8 @@ window.MT = window.MT || {};
       case 'log_asset_sold': return ['🏷️ ' + esc(t('bn_sold', { name: P.name, card: P.card })), 'good'];
       case 'log_scam_bust': MT.FX.shake(); return ['🚨 ' + esc(t('bn_scam', { name: P.name, card: P.card })), 'bad'];
       case 'log_retire_all': return ['🏖️ ' + esc(t('bn_retire')), 'news'];
+      case 'log_short_call': MT.FX.shake(); return ['🔨 ' + esc(t('bn_short_call', { name: P.name, inst: P.inst })), 'bad'];
+      case 'log_deriv_pay': return ['🎯 ' + esc(t('bn_deriv_pay', { name: P.name, amount: P.amount })), 'good'];
       case 'log_goal': MT.FX.confetti(); return ['🎯 ' + esc(t('bn_goal', { name: P.name, goal: P.goal })), 'good'];
       case 'log_home_buy': return ['🏠 ' + esc(t('bn_home', { name: P.name })), 'good'];
       case 'log_retire_early': return ['🏖️ ' + esc(t('bn_retire_early', { name: P.name })), 'good'];
@@ -1969,7 +2050,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh', 'dca-set', 'order-place', 'order-cancel', 'home-open', 'home-buy', 'home-sell-open', 'home-sell'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh', 'dca-set', 'order-place', 'order-cancel', 'home-open', 'home-buy', 'home-sell-open', 'home-sell', 'short', 'cover', 'deriv-buy', 'deriv-sell'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -2249,6 +2330,15 @@ window.MT = window.MT || {};
       case 'order': openOrder(el.dataset.id); break;
       case 'trade': doTrade(el.dataset.side, el.dataset.amount); break;
       case 'trade-sh': doTradeShares(el.dataset.side, el.dataset.qty); break;
+      case 'short': act({ type: 'SHORT', id: UI.orderId, units: Number(el.dataset.units) }); openOrder(UI.orderId); break;
+      case 'cover': act({ type: 'COVER', id: UI.orderId }); openOrder(UI.orderId); break;
+      case 'deriv-open': openDeriv(el.dataset.cat); break;
+      case 'deriv-under': UI.deriv.under = el.dataset.under; openDeriv(UI.deriv.cat); break;
+      case 'deriv-buy':
+        act({ type: 'DERIV_BUY', cat: UI.deriv.cat, under: UI.deriv.under, kind: el.dataset.kind, strike: Number(el.dataset.strike), expiry: Number(el.dataset.expiry), lots: Number(el.dataset.lots) });
+        openDeriv(UI.deriv.cat);
+        break;
+      case 'deriv-sell': act({ type: 'DERIV_SELL', did: el.dataset.did }); renderRight(); break;
       case 'report': renderReport(UI.game.report); break;
       case 'tile': showTileInfo(el.dataset.type); break;
     }

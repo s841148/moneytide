@@ -733,3 +733,11 @@ i { font-style: normal; }
 .od-btns.lim select { width: auto; }
 .lim-list { margin-top: 6px; }
 .btn.warn small { display: block; font-size: 11px; font-weight: 400; }
+
+/* M10：衍生性商品表 */
+.dv-table td, .dv-table th { padding: 5px 6px; font-size: 13px; white-space: nowrap; }
+.dv-table td:last-child { display: flex; gap: 4px; }
+@media (max-width: 560px) {
+  .dv-table td, .dv-table th { padding: 4px 3px; font-size: 12px; }
+  .dv-table .btn.xs { padding: 2px 5px; }
+}
