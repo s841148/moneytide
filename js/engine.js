@@ -53,6 +53,10 @@ window.MT = window.MT || {};
 
   // ── M9：定期定額、自住房、限價單、信用卡、人生目標 ──
   const DCA_MAX = 3; // 最多 3 檔定期定額
+  const HOME_LTV = 0.7; // 房屋增貸：最多借到房價 7 成（扣掉原本的房貸）
+  const HOME_LOAN_SPREAD = 1.0; // 房屋增貸利率 = 央行利率 + 1%（信用貸款是 + 9.75%）
+  // 拍賣時，正在出價的人也可以借錢或賣出投資來籌錢
+  const FUND_ACTIONS = ['LOAN', 'HOME_LOAN', 'TRADE', 'SELL_ASSET'];
   const HOMES = { small: { price: 6000000, rent: 12000 }, family: { price: 12000000, rent: 20000 } }; // 房價（以房價指數 1 計）與省下的房租
   const HOME_DOWN = 0.2; // 頭期款 2 成
   const HOME_CLOSING = 0.02; // 契稅、代書、仲介等買房成本
@@ -121,6 +125,13 @@ window.MT = window.MT || {};
     marginLoan(p) { return Object.keys(p.margin || {}).reduce((s, id) => s + p.margin[id], 0); },
     marginInterest(p) { return Math.round(Calc.marginLoan(p) * MARGIN_RATE); },
     loanPayment(p) { return Math.round(p.bankLoan * Calc.loanRate(p)); },
+    homeLoanPayment(p) { return Math.round((p.homeLoan || 0) * (p.homeLoanRate || 0)); },
+    // 還可以用房子抵押借多少
+    homeLoanRoom(p) {
+      if (!(p.home > 0)) return 0;
+      const mort = p.liabilities.filter((l) => l.home || (l.orig && l.floating)).reduce((s, l) => s + l.balance, 0);
+      return Math.max(0, Math.floor((p.home * HOME_LTV - mort - (p.homeLoan || 0)) / LOAN_UNIT) * LOAN_UNIT);
+    },
     assetIncome(p) { return p.assets.reduce((s, a) => s + a.cashflow, 0); },
     passive(s, p) { return Calc.assetIncome(p) + M.dividendMonthly(s, p); },
     debtPayments(p) { return p.liabilities.reduce((s, l) => s + l.payment, 0); },
@@ -129,7 +140,7 @@ window.MT = window.MT || {};
     selfPension(p) { return p.pension && p.pension.self && !p.retired ? Math.round(p.salary * PENSION_SELF) : 0; },
     pensionIncome(p) { return p.retired && p.pension ? p.pension.labor + (p.pension.acct > 0 ? p.pension.fromAcct : 0) : 0; },
     scamIncome(p) { return p.assets.reduce((s, a) => s + (a.kind === 'scam' ? a.cashflow : 0), 0); },
-    expenses(p) { return Math.round(p.living) + p.tax + Calc.childCost(p) + Calc.debtPayments(p) + Calc.loanPayment(p) + Calc.marginInterest(p) + Calc.premium(p) + Calc.selfPension(p); },
+    expenses(p) { return Math.round(p.living) + p.tax + Calc.childCost(p) + Calc.debtPayments(p) + Calc.loanPayment(p) + Calc.homeLoanPayment(p) + Calc.marginInterest(p) + Calc.premium(p) + Calc.selfPension(p); },
     income(s, p) { return Math.round(p.salary) + Calc.passive(s, p) + Calc.pensionIncome(p); },
     cashflow(s, p) { return Calc.income(s, p) - Calc.expenses(p); },
     // 融券部位的淨值：保證金 + 賣出所得 − 買回需要的錢
@@ -147,7 +158,7 @@ window.MT = window.MT || {};
     netWorth(s, p) {
       const assets = p.cash + p.home + p.assets.reduce((sum, a) => sum + assetValue(a), 0) + M.holdingValue(s, p) + (p.pension ? p.pension.acct : 0)
         + Calc.shortValue(s, p) + Calc.derivValue(s, p);
-      const debts = p.bankLoan + Calc.marginLoan(p)
+      const debts = p.bankLoan + (p.homeLoan || 0) + Calc.marginLoan(p)
         + p.liabilities.filter((l) => l.lender == null).reduce((sum, l) => sum + l.balance, 0)
         + p.liabilities.filter((l) => l.lender != null).reduce((sum, l) => sum + l.principal, 0)
         + p.assets.reduce((sum, a) => sum + a.mortgage, 0);
@@ -350,7 +361,7 @@ window.MT = window.MT || {};
     switch (p.goal) {
       case 'home': return { done: p.home > 0, ratio: p.home > 0 ? 1 : pr(p.cash / (HOMES.small.price * state.market.reIndex * (HOME_DOWN + HOME_CLOSING))) };
       case 'debtfree': {
-        const debt = p.liabilities.reduce((s, l) => s + (l.lender != null ? l.principal : l.balance), 0) + p.bankLoan + Calc.marginLoan(p);
+        const debt = p.liabilities.reduce((s, l) => s + (l.lender != null ? l.principal : l.balance), 0) + p.bankLoan + (p.homeLoan || 0) + Calc.marginLoan(p);
         return { done: debt <= 0 && state.round >= 8, ratio: debt <= 0 ? 1 : 0 };
       }
       case 'passive': return { done: Calc.realPassive(state, p) >= 30000, ratio: pr(Calc.realPassive(state, p) / 30000) };
@@ -387,7 +398,7 @@ window.MT = window.MT || {};
   function homeSaleQuote(state, p) {
     const value = p.home;
     const fee = Math.round(value * HOME_SELL_FEE);
-    const debt = homeMortgage(p).reduce((s, l) => s + l.balance, 0);
+    const debt = homeMortgage(p).reduce((s, l) => s + l.balance, 0) + (p.homeLoan || 0); // 房屋增貸也要一起還清
     const gain = value - fee - (p.homeCost || value);
     // 自住房：持有滿 6 年，400 萬以內免稅、超過的部分 10%；未滿 6 年依一般房地合一稅
     const held = state.round - (p.homeBought || 0);
@@ -1206,6 +1217,7 @@ window.MT = window.MT || {};
     state.players.forEach((p) => {
       if (p.bankrupt) return;
       p.loanRate = (m.rate + BANK_SPREAD) / 1200;
+      if (p.homeLoan) p.homeLoanRate = (m.rate + HOME_LOAN_SPREAD) / 1200;
       if (p.homeCost && p.home > 0) p.home = Math.round((p.homeCost * state.market.reIndex) / (p.homeIdx || 1));
       p.liabilities.forEach((l) => {
         if (l.card) {
@@ -1490,7 +1502,9 @@ window.MT = window.MT || {};
 
   function run(state, action) {
     if (state.phase === 'gameover') return { ok: false, error: 'game_over' };
-    const p = state.players[state.current];
+    const pdg = state.pending;
+    const bidding = state.phase === 'resolve' && pdg && pdg.type === 'auction';
+    const p = bidding && FUND_ACTIONS.indexOf(action.type) >= 0 ? state.players[pdg.turn] : state.players[state.current];
     let error = null;
     let result = null;
 
@@ -1509,7 +1523,7 @@ window.MT = window.MT || {};
         break;
       case 'TRADE': {
         // 處理投資機會卡時可以先賣出投資湊頭期款，但不能買進
-        const sellForDeal = state.phase === 'resolve' && state.pending && state.pending.type === 'deal' && action.side === 'sell';
+        const sellForDeal = state.phase === 'resolve' && state.pending && (state.pending.type === 'deal' || state.pending.type === 'auction') && action.side === 'sell';
         if (FREE_PHASES.indexOf(state.phase) < 0 && !sellForDeal) return { ok: false, error: 'cant_trade' };
         if (action.side === 'sell' && M.isFrozen(state, action.id)) return { ok: false, error: 'frozen' };
         const id = action.id;
@@ -1688,6 +1702,7 @@ window.MT = window.MT || {};
         p.liabilities = p.liabilities.filter((l) => ids.indexOf(l.id) < 0);
         p.living += q.rent; // 回去租屋
         p.home = 0;
+        p.homeLoan = 0;
         p.homeCost = 0;
         p.homeRent = 0;
         const st = stat(p);
@@ -1774,7 +1789,7 @@ window.MT = window.MT || {};
       }
       case 'SELL_ASSET': {
         // 處理投資機會卡時也可以賣資產湊頭期款
-        const forDeal = state.phase === 'resolve' && state.pending && state.pending.type === 'deal';
+        const forDeal = state.phase === 'resolve' && state.pending && (state.pending.type === 'deal' || state.pending.type === 'auction');
         if (FREE_PHASES.indexOf(state.phase) < 0 && !forDeal) return { ok: false, error: 'cant_trade' };
         const a = p.assets.find((x) => x.id === action.id);
         if (!a || !SALE_FEE[a.kind]) return { ok: false, error: 'bad_target' };
@@ -1835,6 +1850,37 @@ window.MT = window.MT || {};
         if (!amount) return { ok: false, error: 'loan_denied' };
         p.cash += amount;
         log(state, 'log_loan', { name: p.name, amount: money(amount) });
+        break;
+      }
+      case 'HOME_LOAN': {
+        // 房屋增貸：用自住房抵押，利率比信用貸款低很多；銀行一樣要求借款後現金流不能是負的
+        const room = Calc.homeLoanRoom(p);
+        if (room <= 0) return { ok: false, error: p.home > 0 ? 'home_loan_full' : 'no_home' };
+        const units = Math.max(1, Math.min(50, Math.round(action.units || 1)));
+        const rate = (state.macro.rate + HOME_LOAN_SPREAD) / 1200;
+        const oldLoan = p.homeLoan || 0;
+        const oldRate = p.homeLoanRate || rate;
+        p.homeLoanRate = rate;
+        let amount = 0;
+        for (let k = 0; k < units && amount + LOAN_UNIT <= room; k++) {
+          p.homeLoan = oldLoan + amount + LOAN_UNIT;
+          if (Calc.cashflow(state, p) < 0) break;
+          amount += LOAN_UNIT;
+        }
+        p.homeLoan = oldLoan + amount;
+        if (!amount) { p.homeLoanRate = oldRate; return { ok: false, error: 'loan_denied' }; }
+        p.cash += amount;
+        log(state, 'log_home_loan', { name: p.name, amount: money(amount), rate: (rate * 1200).toFixed(2) });
+        break;
+      }
+      case 'HOME_REPAY': {
+        const units = Math.max(1, Math.min(50, Math.round(action.units || 1)));
+        const amount = Math.min(LOAN_UNIT * units, p.homeLoan || 0);
+        if (amount <= 0) return { ok: false, error: 'no_loan' };
+        if (p.cash < amount) return { ok: false, error: 'not_enough_cash' };
+        p.cash -= amount;
+        p.homeLoan -= amount;
+        log(state, 'log_home_repay', { name: p.name, amount: money(amount) });
         break;
       }
       case 'REPAY': {
@@ -1906,7 +1952,7 @@ window.MT = window.MT || {};
     saleChance, saleQuote, SALE_FEE, upgradeInfo, ipoQuote, taxBreakdown, landTaxRate, migrate,
     earliestRetire, earliestOf, pensionQuote, retireRoundOf,
     derivMenu, derivBid, derivLeft, derivUnders, DERIVS, SHORT_COLLATERAL, SHORT_MAINT,
-    homeQuote, homeSaleQuote, goalProgress, HOMES, DCA_MAX, ORDER_MAX, ORDER_ROUNDS, CARD_APR, GOAL_BONUS, GOAL_FREEDOM_BONUS,
+    homeQuote, homeSaleQuote, goalProgress, HOME_LTV, HOME_LOAN_SPREAD, HOMES, DCA_MAX, ORDER_MAX, ORDER_ROUNDS, CARD_APR, GOAL_BONUS, GOAL_FREEDOM_BONUS,
     PREMIUM, PENSION_SELF, IPO_PE,
     MARGIN_LEVERAGE, MARGIN_RATE, MAINTENANCE, BANK_SPREAD, SAVE_VERSION,
     Calc, LOAN_UNIT, CHILD_COST, QUIZ_REWARD, CB_REWARD, PAYDAY_MONTHS, HAND_LIMIT, SHORT_NOTIONAL, lengthRounds,

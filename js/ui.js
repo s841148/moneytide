@@ -645,7 +645,7 @@ window.MT = window.MT || {};
 
   function openSell(id) {
     const g = UI.game;
-    const p = g.players[g.current];
+    const p = fundActor(g);
     const a = p.assets.find((x) => x.id === id);
     if (!a) { UI.closeModal(); return; }
     if (!UI.sell || UI.sell.id !== id) UI.sell = { id, price: E.assetValue(a) };
@@ -669,7 +669,7 @@ window.MT = window.MT || {};
   // 開價變動時即時更新試算（不重畫整個視窗，避免輸入框失焦）
   function updateSellQuote() {
     const g = UI.game;
-    const p = g.players[g.current];
+    const p = fundActor(g);
     const a = UI.sell && p.assets.find((x) => x.id === UI.sell.id);
     const box = document.querySelector('.sell-quote');
     if (!a || !box) return;
@@ -884,6 +884,7 @@ window.MT = window.MT || {};
           + '<div class="au-turn" style="--pc:' + bidder.color + '"><span class="dot"></span>' + esc(t('au_turn', { name: bidder.name })) + '</div></div>'
           + '<p class="small">' + esc(t('au_roi', { roi: (roi * 100).toFixed(1) + '%' })) + ' · ' + rich(t('au_tip')) + '</p>'
           + '<div class="small muted">' + esc(t('od_cash', { cash: { money: bidder.cash } })) + '</div>'
+          + (isMine(bidder) ? '<p class="small">' + t('au_fund_hint') + ' <button class="btn xs" data-action="au-fund" data-tab="statement">' + t('tab_statement') + '</button> <button class="btn xs" data-action="au-fund" data-tab="market">' + t('tab_market') + '</button></p>' : '')
           + '<div class="actions">' + opts.map((v) => '<button class="btn primary" data-action="choose" data-choice="bid" data-amount="' + v + '"' + (bidder.cash < v ? ' disabled' : '') + '>' + t('au_bid', { amount: { money: v } }) + '</button>').join('')
           + '<button class="btn" data-action="choose" data-choice="fold">' + t('au_fold') + '</button></div>';
       }
@@ -974,8 +975,17 @@ window.MT = window.MT || {};
 
   function viewId() {
     const g = UI.game;
-    return UI.viewPlayer == null ? g.current : UI.viewPlayer;
+    if (UI.viewPlayer != null) return UI.viewPlayer;
+    const b = bidderOf(g);
+    return b && isMine(b) ? b.id : g.current;
   }
+  // 拍賣中正在出價的玩家（沒有拍賣就是 null）
+  function bidderOf(g) {
+    const pd = g.pending;
+    return g.phase === 'resolve' && pd && pd.type === 'auction' ? g.players[pd.turn] : null;
+  }
+  // 可以借錢、賣投資籌錢的人：拍賣時是出價者，平常是輪到的人
+  function fundActor(g) { return bidderOf(g) || g.players[g.current]; }
 
   // ── 右側：財報 / 市場 ──
   function renderRight() {
@@ -989,6 +999,7 @@ window.MT = window.MT || {};
     const g = UI.game;
     const p = g.players[viewId()];
     const isCur = p.id === g.current && g.phase !== 'gameover' && isMine(p);
+    const bidding = bidderOf(g) === p && isMine(p); // 拍賣出價中：可以借錢、賣資產籌錢
     const prof = profOf(p);
     const row = (label, val, cls, extra) => '<div class="srow ' + (cls || '') + '"><span>' + label + '</span><b>' + val + '</b>' + (extra || '') + '</div>';
     const passive = C.passive(g, p);
@@ -1014,6 +1025,7 @@ window.MT = window.MT || {};
     if (p.children) html += row(t('children_cost', { n: p.children }), fmt(-C.childCost(p)), 'neg');
     p.liabilities.forEach((l) => { html += row(esc(L(l.name)), fmt(-l.payment), 'neg'); });
     if (p.bankLoan) html += row(rich({ zh: '[[credit_loan|銀行借款]]利息', en: '[[credit_loan|Bank loan]] interest' }), fmt(-C.loanPayment(p)), 'neg');
+    if (p.homeLoan) html += row(rich(t('hl_interest')), fmt(-C.homeLoanPayment(p)), 'neg');
     if (C.marginLoan(p)) html += row(rich({ zh: '[[margin_trading|融資]]利息', en: '[[margin_trading|Margin]] interest' }), fmt(-C.marginInterest(p)), 'neg');
     if (C.premium(p)) html += row(rich({ zh: '[[insurance|保險費]]', en: '[[insurance|Insurance premiums]]' }), fmt(-C.premium(p)), 'neg');
     if (C.selfPension(p)) html += row(rich({ zh: '[[labor_pension|勞退自提]]（存進退休帳戶）', en: '[[labor_pension|Pension top-up]] (saved)' }), fmt(-C.selfPension(p)), 'neg');
@@ -1034,7 +1046,7 @@ window.MT = window.MT || {};
       const v = E.assetValue(a);
       const tag = a.underwater ? ' <span class="tag bad">' + rich({ zh: '[[negative_equity|資不抵債]]', en: '[[negative_equity|Underwater]]' }) + '</span>' : '';
       const chg = a.kind !== 'loan' && v !== a.cost ? ' <small class="' + moneyCls(v - a.cost) + '">' + pct(v / a.cost - 1) + '</small>' : '';
-      const canSell = isCur && E.SALE_FEE[a.kind] && (g.phase !== 'resolve' || (g.pending && g.pending.type === 'deal'));
+      const canSell = (isCur || bidding) && E.SALE_FEE[a.kind] && (g.phase !== 'resolve' || (g.pending && (g.pending.type === 'deal' || g.pending.type === 'auction')));
       const sellBtn = canSell ? '<button class="btn xs" data-action="sell-open" data-id="' + a.id + '">' + t('sell') + '</button>' : '';
       const free = isCur && g.phase !== 'resolve';
       const bizBtn = free && a.chain
@@ -1061,10 +1073,19 @@ window.MT = window.MT || {};
       html += row(rich({ zh: '[[margin_trading|融資借款]]：', en: '[[margin_trading|Margin loan]]: ' }) + esc(L(M.byId[id].name)), fmt(-p.margin[id]), 'neg');
     });
     html += row(rich({ zh: '[[credit_loan|銀行借款]]', en: '[[credit_loan|Bank loan]]' }), fmt(-p.bankLoan), 'neg');
-    if (isCur) {
+    if (p.homeLoan) html += row(rich(t('hl_row')), fmt(-p.homeLoan), 'neg');
+    if (isCur || bidding) {
       html += '<div class="loan-btns"><button class="btn sm" data-action="loan">🏦 ' + t('borrow') + '</button>'
-        + '<button class="btn sm" data-action="repay"' + (p.bankLoan <= 0 || p.cash < Math.min(E.LOAN_UNIT, p.bankLoan) ? ' disabled' : '') + '>' + t('repay') + '</button></div>'
+        + (bidding ? '' : '<button class="btn sm" data-action="repay"' + (p.bankLoan <= 0 || p.cash < Math.min(E.LOAN_UNIT, p.bankLoan) ? ' disabled' : '') + '>' + t('repay') + '</button>') + '</div>'
         + '<p class="muted small">' + t('loan_rule', { rate: (C.loanRate(p) * 100).toFixed(1) }) + '</p>';
+      if (p.home > 0) {
+        const room = C.homeLoanRoom(p);
+        const hRate = g.macro.rate + E.HOME_LOAN_SPREAD;
+        html += '<div class="loan-btns"><button class="btn sm" data-action="home-loan"' + (room <= 0 ? ' disabled' : '') + '>🏠 ' + t('hl_btn') + '</button>'
+          + '<button class="btn sm" data-action="home-loan" data-units="10"' + (room < 10 * E.LOAN_UNIT ? ' disabled' : '') + '>' + t('hl_btn10') + '</button>'
+          + (bidding ? '' : '<button class="btn sm" data-action="home-repay"' + (!(p.homeLoan > 0) || p.cash < Math.min(E.LOAN_UNIT, p.homeLoan) ? ' disabled' : '') + '>' + t('hl_repay') + '</button>') + '</div>'
+          + '<p class="muted small">' + rich(t('hl_rule', { rate: hRate.toFixed(2), ltv: Math.round(E.HOME_LTV * 100), room: { money: room }, bank: (C.loanRate(p) * 1200).toFixed(2) })) + '</p>';
+      }
     }
     const nw = C.netWorth(g, p);
     html += row(rich({ zh: '[[net_worth]]', en: '[[net_worth]]' }), fmt(nw), 'grand ' + moneyCls(nw)) + '</section>';
@@ -1430,7 +1451,7 @@ window.MT = window.MT || {};
   function openOrder(id) {
     const g = UI.game;
     const i = M.byId[id];
-    const p = g.players[g.current];
+    const p = fundActor(g);
     UI.orderId = id;
     const isCash = i.type === 'deposit' || i.type === 'fx';
     const priceTWD = M.priceTWD(g, id);
@@ -1478,16 +1499,16 @@ window.MT = window.MT || {};
       + (i.fee ? ' · ' + rich({ zh: '[[expense_ratio|內扣費用]]', en: '[[expense_ratio|Annual fee]]' }) + ' ' + (i.fee * 100).toFixed(2) + '%' : '')
       + (isCash ? '' : ' · ' + rich({ zh: '大量買賣會有[[slippage]]', en: 'Big orders cause [[slippage]]' })) + '</p>';
 
-    const sellOnly = g.phase === 'resolve' && g.pending && g.pending.type === 'deal';
+    const sellOnly = g.phase === 'resolve' && g.pending && (g.pending.type === 'deal' || g.pending.type === 'auction');
     const marginOK = M.LEVELS[g.config.difficulty] >= 1 && (i.type === 'stock' || i.type === 'etf');
     if (p.margin && p.margin[id]) {
       const ratio = value / p.margin[id];
       html += '<div class="note ' + (ratio < 1.6 ? 'bad' : '') + '">' + rich({ zh: '[[margin_trading|融資借款]]', en: '[[margin_trading|Margin loan]]' }) + ' ' + fmt(p.margin[id])
         + ' · ' + rich({ zh: '[[margin_call|維持率]]', en: '[[margin_call|Maintenance]]' }) + ' <b>' + (ratio * 100).toFixed(0) + '%</b>（' + t('od_maint_line') + '）</div>';
     }
-    if ((canTrade(g) || sellOnly) && g.players[g.current] === p && isMine(p) && M.byShares(i)) {
+    if ((canTrade(g) || sellOnly) && fundActor(g) === p && isMine(p) && M.byShares(i)) {
       html += sharesTradeHtml(g, p, i, sellOnly, frozen, marginOK);
-    } else if ((canTrade(g) || sellOnly) && g.players[g.current] === p && isMine(p)) {
+    } else if ((canTrade(g) || sellOnly) && fundActor(g) === p && isMine(p)) {
       const buyAmts = [10000, 50000, 100000, 500000];
       html += '<div class="od-trade"><div class="small">' + esc(t('od_cash', { cash: { money: p.cash } })) + '</div>'
         + (sellOnly ? '' : '<div class="od-btns"><b>' + t('od_buy') + '</b>'
@@ -1592,7 +1613,7 @@ window.MT = window.MT || {};
   }
   function doTradeShares(side, qty) {
     const g = UI.game;
-    const p = g.players[g.current];
+    const p = fundActor(g);
     const id = UI.orderId;
     let n = qty === 'input' ? Math.floor(Number((document.querySelector('.sh-input') || {}).value) || 0) : Number(qty);
     if (!(n > 0)) { UI.toast(esc(t('err_bad_amount')), 'err-toast', 2500); return; }
@@ -1603,7 +1624,7 @@ window.MT = window.MT || {};
 
   function doTrade(side, amount) {
     const g = UI.game;
-    const p = g.players[g.current];
+    const p = fundActor(g);
     const id = UI.orderId;
     let qty;
     if (side === 'buy' || side === 'margin') {
@@ -2050,7 +2071,7 @@ window.MT = window.MT || {};
     const actor = MT.AI.actorOf(g);
     return !(actor && isMine(actor)); // 電腦或別台裝置的玩家在行動
   }
-  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh', 'dca-set', 'order-place', 'order-cancel', 'home-open', 'home-buy', 'home-sell-open', 'home-sell', 'short', 'cover', 'deriv-buy', 'deriv-sell'];
+  const GAME_ACTIONS = ['roll', 'end-turn', 'choose', 'loan', 'repay', 'payoff', 'trade', 'hand-card', 'play-confirm', 'trade-open', 'tr-send', 'sell-open', 'sell-confirm', 'insure', 'pension-self', 'up-open', 'up-confirm', 'ipo-open', 'ipo-confirm', 'retire-open', 'retire-confirm', 'trade-sh', 'dca-set', 'order-place', 'order-cancel', 'home-open', 'home-buy', 'home-sell-open', 'home-sell', 'short', 'cover', 'deriv-buy', 'deriv-sell', 'home-loan', 'home-repay'];
 
   function openSettings() {
     const S = MT.Audio.settings;
@@ -2260,6 +2281,14 @@ window.MT = window.MT || {};
       }
       case 'tr-send': sendTrade(); break;
       case 'loan': act({ type: 'LOAN' }); break;
+      case 'home-loan': act({ type: 'HOME_LOAN', units: Number(el.dataset.units) || 1 }); break;
+      case 'home-repay': act({ type: 'HOME_REPAY' }); break;
+      case 'au-fund':
+        UI.viewPlayer = null;
+        UI.rightTab = el.dataset.tab;
+        if (UI.mview !== undefined) UI.mview = el.dataset.tab;
+        renderGame();
+        break;
       case 'repay': act({ type: 'REPAY' }); break;
       case 'payoff': act({ type: 'PAYOFF', id: el.dataset.id }); break;
       case 'sell-open': UI.sell = null; openSell(el.dataset.id); break;
@@ -2286,7 +2315,7 @@ window.MT = window.MT || {};
       case 'ipo-open': openIpo(el.dataset.id); break;
       case 'ipo-confirm': UI.closeModal(); act({ type: 'IPO', id: el.dataset.id }); break;
       case 'sell-pct': {
-        const a = UI.game.players[UI.game.current].assets.find((x) => x.id === UI.sell.id);
+        const a = fundActor(UI.game).assets.find((x) => x.id === UI.sell.id);
         UI.sell.price = Math.round(E.assetValue(a) * Number(el.dataset.val) / 10000) * 10000;
         const inp = document.querySelector('.sell-input');
         if (inp) inp.value = UI.sell.price;

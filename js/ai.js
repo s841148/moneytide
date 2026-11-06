@@ -100,10 +100,14 @@ window.MT = window.MT || {};
 
   // ── 自由階段（擲骰前 / 回合結束前）──
   function repayLoans(s, p, st, m) {
-    if (m.fails.REPAY || p.bankLoan <= 0) return null;
-    const units = Math.min(Math.ceil(p.bankLoan / E.LOAN_UNIT), Math.floor((p.cash - reserveOf(p) * 1.2 - 50000) / E.LOAN_UNIT));
-    if (units >= 1) {
-      return act({ type: 'REPAY', units }, tx('有多的現金，先還銀行借款，省下 12% 的利息', 'Spare cash — repay the bank loan and save 12% interest'));
+    const free = Math.floor((p.cash - reserveOf(p) * 1.2 - 50000) / E.LOAN_UNIT);
+    if (free < 1) return null;
+    // 先還利率高的信用貸款，再還房屋增貸
+    if (!m.fails.REPAY && p.bankLoan > 0) {
+      return act({ type: 'REPAY', units: Math.min(Math.ceil(p.bankLoan / E.LOAN_UNIT), free) }, tx('有多的現金，先還銀行借款，省下 12% 的利息', 'Spare cash — repay the bank loan and save 12% interest'));
+    }
+    if (!m.fails.HOME_REPAY && p.homeLoan > 0) {
+      return act({ type: 'HOME_REPAY', units: Math.min(Math.ceil(p.homeLoan / E.LOAN_UNIT), free) }, tx('有多的現金，還掉房屋增貸', 'Spare cash — paying down the home-equity loan'));
     }
     return null;
   }
@@ -489,6 +493,10 @@ window.MT = window.MT || {};
     }
     const need = best.card.down - p.cash;
     const units = Math.ceil(need / E.LOAN_UNIT);
+    // 有房子的話先用房屋增貸（利率低很多）
+    if (!m.fails.HOME_LOAN && C.homeLoanRoom(p) >= units * E.LOAN_UNIT && st.loan > 0) {
+      return act({ type: 'HOME_LOAN', units }, tx('拿房子抵押增貸 ' + fmt(units * E.LOAN_UNIT) + '，利率比信用貸款低很多', 'Borrowing ' + fmt(units * E.LOAN_UNIT) + ' against my home — far cheaper than an unsecured loan'));
+    }
     // 銀行規定借款後現金流不能為負：先算銀行最多肯借幾筆，借不夠就別借
     const bankMax = Math.floor(C.cashflow(s, p) / (E.LOAN_UNIT * C.loanRate(p)));
     if (st.loan > 0 && !m.fails.LOAN && units <= bankMax && units * E.LOAN_UNIT * C.loanRate(p) <= best.card.cashflow * st.loan) {
@@ -500,12 +508,31 @@ window.MT = window.MT || {};
     return act({ type: 'CHOOSE', choice: 'pass' }, tx('現金不夠，只好放棄', 'Not enough cash — pass'));
   }
 
+  const auctionWorth = {}; // 每場拍賣先決定好自己的估價，籌錢後才不會變來變去
   function resolveAuction(s, p, st, lv) {
     const pd = s.pending;
     const card = E.getCard(pd.deck, pd.card);
     const min = E.minBid(pd);
     const [lo, hi] = lv.bid;
-    const maxBid = Math.min((card.cashflow * 12) / st.auctionROI * (lo + Math.random() * (hi - lo)), p.cash - reserveOf(p) * 0.5);
+    const key = s.round + '-' + pd.card + '-' + p.id;
+    if (auctionWorth[key] == null) auctionWorth[key] = (card.cashflow * 12) / st.auctionROI * (lo + Math.random() * (hi - lo));
+    const worth = auctionWorth[key];
+    const maxBid = Math.min(worth, p.cash - reserveOf(p) * 0.5);
+    // 價格明顯划算但現金不夠：先賣部分投資、再用房屋增貸、最後才用信用貸款（每場拍賣最多籌錢 2 次）
+    const fundKey = key + '-fund';
+    if (min > maxBid && min <= worth * 0.85 && (auctionWorth[fundKey] || 0) < 2) {
+      const m = mem(s);
+      const need = min - (p.cash - reserveOf(p) * 0.5);
+      const units = Math.ceil(need / E.LOAN_UNIT);
+      auctionWorth[fundKey] = (auctionWorth[fundKey] || 0) + 1;
+      const id = Object.keys(p.holdings).filter((x) => !M.isFrozen(s, x)).sort((a, b) => p.holdings[b] * M.priceTWD(s, b) - p.holdings[a] * M.priceTWD(s, a))[0];
+      if (id && !m.fails.TRADE) {
+        const sellUnits = Math.min(p.holdings[id], Math.ceil((need * 1.02) / M.priceTWD(s, id)));
+        return act({ type: 'TRADE', id, side: 'sell', amount: sellUnits }, tx('賣掉部分「' + nameOf(id).zh + '」湊錢參加拍賣', 'Selling some "' + nameOf(id).en + '" to fund my bid'));
+      }
+      if (!m.fails.HOME_LOAN && C.homeLoanRoom(p) >= units * E.LOAN_UNIT) return act({ type: 'HOME_LOAN', units }, tx('房屋增貸 ' + fmt(units * E.LOAN_UNIT) + ' 來出價', 'Borrowing ' + fmt(units * E.LOAN_UNIT) + ' against my home to bid'));
+      if (st.loan > 0 && !m.fails.LOAN) return act({ type: 'LOAN', units }, tx('向銀行借 ' + fmt(units * E.LOAN_UNIT) + ' 來出價', 'Borrowing ' + fmt(units * E.LOAN_UNIT) + ' from the bank to bid'));
+    }
     if (min <= maxBid) {
       return act({ type: 'CHOOSE', choice: 'bid', amount: min }, tx('出價 ' + fmt(min) + '，報酬率還有 ' + pct(dealROI(card, min)), 'Bid ' + fmt(min) + ' — still a ' + pct(dealROI(card, min)) + ' return'));
     }
