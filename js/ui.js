@@ -1436,11 +1436,31 @@ window.MT = window.MT || {};
     const can = canTrade(g) && isMine(p);
     const menu = E.derivMenu(g, cat, under);
     const unit = t(cat === 'option' ? 'dv_unit_option' : 'dv_unit_warrant');
-    const rows = menu.map((x) => '<tr><td>' + t('dk_' + cat + '_' + x.kind) + '</td><td>' + x.strike + '</td><td title="' + esc(t('lim_until', { round: x.expiry })) + '">' + t('dv_expiry', { round: x.expiry, n: x.quarters }) + '</td><td><b>' + fmt(x.price) + '</b></td>'
-      + '<td>' + (can ? [1, 5].map((n) => '<button class="btn xs" data-action="deriv-buy" data-kind="' + x.kind + '" data-strike="' + x.strike + '" data-expiry="' + x.expiry + '" data-lots="' + n + '"' + (p.cash < x.price * n ? ' disabled' : '') + '>' + t('od_buy') + ' ' + n + '</button>').join(' ') : '') + '</td></tr>').join('');
+    // 損益試算：假設到期時標的價格 = 現價 × (1 + 漲跌幅)
+    const S = g.market.prices[under];
+    const pctMove = UI.deriv.move == null ? 0.1 : UI.deriv.move;
+    const target = S * (1 + pctMove);
+    const dp = S >= 100 ? 1 : 2;
+    const scen = '<div class="dv-scn"><b>' + t('dv_scn_title') + '</b><span>' + t('dv_scn', { inst: L(i.name) }) + '</span><div class="chips">'
+      + [-0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2, 0.3].map((v) => '<button class="chip' + (Math.abs(v - pctMove) < 1e-9 ? ' on' : '') + '" data-action="deriv-move" data-move="' + v + '">' + (v > 0 ? '+' : '') + Math.round(v * 100) + '%</button>').join('')
+      + '</div><small class="muted">' + t('dv_scn_price', { price: target.toFixed(dp) }) + '</small></div>';
+    const rows = menu.map((x) => {
+      const prem = x.price / d.mult; // 每股（每單位）實際付出的權利金
+      const be = x.kind === 'call' ? x.strike + prem : x.strike - prem;
+      const need = be / S - 1;
+      const pay = (x.kind === 'call' ? Math.max(0, target - x.strike) : Math.max(0, x.strike - target)) * d.mult;
+      const pl = Math.round(pay - x.price);
+      const plPct = Math.round((pl / x.price) * 100);
+      return '<tr><td>' + t('dk_' + cat + '_' + x.kind) + '</td><td>' + x.strike + '</td><td title="' + esc(t('lim_until', { round: x.expiry })) + '">' + t('dv_expiry', { round: x.expiry, n: x.quarters }) + '</td><td><b>' + fmt(x.price) + '</b></td>'
+        + '<td>' + (can ? [1, 5].map((n) => '<button class="btn xs" data-action="deriv-buy" data-kind="' + x.kind + '" data-strike="' + x.strike + '" data-expiry="' + x.expiry + '" data-lots="' + n + '"' + (p.cash < x.price * n ? ' disabled' : '') + '>' + t('od_buy') + ' ' + n + '</button>').join(' ') : '') + '</td></tr>'
+        + '<tr class="dv-calc"><td colspan="5">' + t('dv_be', { price: be.toFixed(dp), dir: t(need >= 0 ? 'dv_dir_up' : 'dv_dir_down'), pct: Math.abs(need * 100).toFixed(1) })
+        + ' ｜ ' + t('dv_pl_at', { price: target.toFixed(dp) }) + ' <b class="' + moneyCls(pl) + '">' + (pl > 0 ? '+' : '') + fmt(pl) + '（' + (plPct > 0 ? '+' : '') + plPct + '%）</b></td></tr>';
+    }).join('');
     UI.modal('<h2>' + (cat === 'option' ? '📊 ' : '📜 ') + t(cat === 'option' ? 'dv_option' : 'dv_warrant') + '</h2>'
       + (unders.length > 1 ? '<div class="chips">' + unders.map((u) => '<button class="chip' + (u === under ? ' on' : '') + '" data-action="deriv-under" data-under="' + u + '">' + M.byId[u].icon + ' ' + esc(L(M.byId[u].name)) + '</button>').join('') + '</div>' : '')
       + '<p>' + t('dv_under', { inst: L(i.name), price: g.market.prices[under].toFixed(2), vol: Math.round(M.sigmaOf(g, i) * 100) }) + '</p>'
+      + scen
+      + '<p class="small muted">' + rich(t('dv_be_note')) + '</p>'
       + '<div class="table-wrap"><table class="rank dv-table"><thead><tr><th>' + t('dv_kind') + '</th><th>' + rich(t('dv_strike')) + '</th><th>' + t('dv_exp') + '</th><th>' + t('dv_price', { unit }) + '</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>'
       + '<p class="small">' + rich(t(cat === 'option' ? 'dv_option_note' : 'dv_warrant_note', { mult: d.mult, spread: Math.round((d.buy - d.sell) * 100) })) + '</p>'
       + '<p class="small muted">' + rich(t('dv_common_note')) + '</p>', 'order-modal');
@@ -2363,6 +2383,7 @@ window.MT = window.MT || {};
       case 'cover': act({ type: 'COVER', id: UI.orderId }); openOrder(UI.orderId); break;
       case 'deriv-open': openDeriv(el.dataset.cat); break;
       case 'deriv-under': UI.deriv.under = el.dataset.under; openDeriv(UI.deriv.cat); break;
+      case 'deriv-move': UI.deriv.move = Number(el.dataset.move); openDeriv(UI.deriv.cat); break;
       case 'deriv-buy':
         act({ type: 'DERIV_BUY', cat: UI.deriv.cat, under: UI.deriv.under, kind: el.dataset.kind, strike: Number(el.dataset.strike), expiry: Number(el.dataset.expiry), lots: Number(el.dataset.lots) });
         openDeriv(UI.deriv.cat);

@@ -736,8 +736,14 @@ i { font-style: normal; }
 
 /* M10：衍生性商品表 */
 .dv-table td, .dv-table th { padding: 5px 6px; font-size: 13px; white-space: nowrap; }
-.dv-table td:last-child { display: flex; gap: 4px; }
+.dv-table tr:not(.dv-calc) td:last-child { display: flex; gap: 4px; }
 @media (max-width: 560px) {
   .dv-table td, .dv-table th { padding: 4px 3px; font-size: 12px; }
   .dv-table .btn.xs { padding: 2px 5px; }
 }
+
+/* 衍生品損益試算 */
+.dv-scn { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--bg); margin: 8px 0; }
+.dv-scn .chips { margin: 0; }
+.dv-table tr.dv-calc td { font-size: 12px; color: var(--muted); padding-top: 0; white-space: normal; border-top: 0; }
+.dv-table tr.dv-calc td b { white-space: nowrap; }
